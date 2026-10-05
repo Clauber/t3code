@@ -366,7 +366,9 @@ export function makeZCodeAdapterV2(
       // so `turn.terminal` cannot overtake a request's resolution updates.
       const sessionEventPermit = yield* Semaphore.make(1);
       let threadState: ZCodeThreadState | null = null;
-      let catalog: ZCodeCatalog = { models: [], currentSlug: null };
+      let catalog: ZCodeCatalog = { models: [], currentSlug: null, currentReasoningLevel: null };
+      /** The session's own model when T3 opened it; "default" restores it. */
+      let baselineModel: { readonly slug: string; readonly level: string | null } | null = null;
       let appliedMode: string | null = null;
       let appliedModelKey: string | null = null;
       let stopRequested = false;
@@ -734,19 +736,28 @@ export function makeZCodeAdapterV2(
           readonly value: string;
         }>;
       }) {
-        const state = threadState;
-        const turn = state?.activeTurn ?? null;
+        const turn = threadState?.activeTurn ?? null;
+        if (turn === null) {
+          // No T3 turn owns this ask and zcode blocks until it is answered.
+          const options = recordField(input_.record["params"], "options");
+          yield* connection.respond(
+            input_.record["id"],
+            input_.method === "permission"
+              ? (zcodePermissionOptionResponse(options, "deny") ?? { decision: "deny" })
+              : { action: "cancel" },
+          );
+          return;
+        }
         const createdAt = yield* DateTime.now;
         const requestId = yield* idAllocator.allocate.runtimeRequest({
           driver: ZCODE_PROVIDER,
-          ...(turn === null ? {} : { providerTurnId: turn.providerTurn.id }),
+          providerTurnId: turn.providerTurn.id,
           nativeRequestId: input_.nativeKey,
         });
         const nodeId = idAllocator.derive.approvalNode({ requestId });
-        const threadId =
-          turn?.turnInput.threadId ?? state?.providerThread.appThreadId ?? input.threadId;
-        const providerThreadId = state?.providerThread.id ?? null;
-        const providerTurnId = turn?.providerTurn.id ?? null;
+        const threadId = turn.turnInput.threadId;
+        const providerThreadId = turn.turnInput.providerThread.id;
+        const providerTurnId = turn.providerTurn.id;
         const runtimeRequest: OrchestrationV2RuntimeRequest = {
           id: requestId,
           nodeId,
@@ -761,9 +772,9 @@ export function makeZCodeAdapterV2(
         const node: OrchestrationV2ExecutionNode = {
           id: nodeId,
           threadId,
-          runId: turn?.turnInput.runId ?? null,
-          parentNodeId: turn?.turnInput.rootNodeId ?? null,
-          rootNodeId: turn?.turnInput.rootNodeId ?? nodeId,
+          runId: turn.turnInput.runId,
+          parentNodeId: turn.turnInput.rootNodeId,
+          rootNodeId: turn.turnInput.rootNodeId,
           kind: input_.method === "permission" ? "approval_request" : "user_input_request",
           status: "waiting",
           countsForRun: false,
@@ -778,13 +789,13 @@ export function makeZCodeAdapterV2(
         const itemBase = {
           id: idAllocator.derive.approvalTurnItem({ requestId }),
           threadId,
-          runId: turn?.turnInput.runId ?? null,
+          runId: turn.turnInput.runId,
           nodeId,
           providerThreadId,
           providerTurnId,
           nativeItemRef: providerRef(input_.nativeKey),
           parentItemId: null,
-          ordinal: turn === null ? 0 : itemOrdinal(turn, input_.nativeKey),
+          ordinal: itemOrdinal(turn, input_.nativeKey),
           status: "waiting" as const,
           title: input_.title,
           startedAt: createdAt,
@@ -1194,6 +1205,10 @@ export function makeZCodeAdapterV2(
         }
         appliedMode = resumeId === null ? mode : null;
         appliedModelKey = null;
+        baselineModel =
+          catalog.currentSlug === null
+            ? null
+            : { slug: catalog.currentSlug, level: catalog.currentReasoningLevel };
         const previous = threadState;
         if (previous !== null && previous.sessionId !== sessionId) {
           yield* request("session/close", { sessionId: previous.sessionId }).pipe(Effect.ignore);
@@ -1245,25 +1260,25 @@ export function makeZCodeAdapterV2(
           yield* request("session/setMode", { sessionId, mode });
           appliedMode = mode;
         }
-        if (modelSelection.model === ZCODE_DEFAULT_MODEL_SLUG) return;
-        const parsed = parseZCodeModelSlug(modelSelection.model);
+        const isDefault = modelSelection.model === ZCODE_DEFAULT_MODEL_SLUG;
+        // "default" keeps the session's own model; after a T3 pick it restores it.
+        if (isDefault && (appliedModelKey === null || baselineModel === null)) return;
+        const slug = isDefault ? baselineModel!.slug : modelSelection.model;
+        const parsed = parseZCodeModelSlug(slug);
         if (parsed === null) {
-          return yield* protocolError(
-            `ZCode model '${modelSelection.model}' must use provider/model format`,
-          );
+          return yield* protocolError(`ZCode model '${slug}' must use provider/model format`);
         }
-        const known = catalog.models.find((model) => model.slug === modelSelection.model);
-        const requestedLevel = getModelSelectionStringOptionValue(
-          modelSelection,
-          ZCODE_REASONING_OPTION_ID,
-        );
+        const known = catalog.models.find((model) => model.slug === slug);
+        const requestedLevel = isDefault
+          ? (baselineModel!.level ?? undefined)
+          : getModelSelectionStringOptionValue(modelSelection, ZCODE_REASONING_OPTION_ID);
         // Models with reasoning levels reject setModel without one.
         const level =
           requestedLevel !== undefined &&
           (known === undefined || known.reasoningLevels.includes(requestedLevel))
             ? requestedLevel
             : (known?.defaultReasoningLevel ?? undefined);
-        const key = `${modelSelection.model}$${level ?? ""}`;
+        const key = `${slug}$${level ?? ""}`;
         if (key === appliedModelKey) return;
         yield* request("session/setModel", {
           sessionId,
@@ -1272,8 +1287,10 @@ export function makeZCodeAdapterV2(
             modelId: parsed.modelId,
             ...(level === undefined ? {} : { options: { reasoningLevel: level } }),
           },
+          // A T3 pick must not rewrite the user's zcode workspace default.
+          persistAsWorkspaceLastUsed: false,
         });
-        appliedModelKey = key;
+        appliedModelKey = isDefault ? null : key;
         const updatedAt = yield* DateTime.now;
         sessionEntity = { ...sessionEntity, model: modelSelection.model, updatedAt };
         yield* emit({
@@ -1405,17 +1422,23 @@ export function makeZCodeAdapterV2(
             // Sent outside the permit: the pump must stay free to answer the
             // requests zcode raises before it acknowledges the input.
             yield* request("session/send", { sessionId: state.sessionId, content }).pipe(
-              Effect.tapError(() =>
+              Effect.tapError((error) =>
                 sessionEventPermit.withPermits(1)(
-                  Effect.suspend(() =>
-                    state.activeTurn === activeTurn
-                      ? Effect.gen(function* () {
-                          state.activeTurn = null;
-                          yield* updateProviderThread(state, { status: "idle" });
-                          yield* updateProviderSession("ready", null);
-                        })
-                      : Effect.void,
-                  ),
+                  Effect.gen(function* () {
+                    if (state.activeTurn !== activeTurn) return;
+                    state.activeTurn = null;
+                    if (error._tag === "ZCodeRpcTimeoutError") {
+                      // zcode may still accept the input late (hooks, MCP
+                      // startup, a slow approval) and run the turn with no
+                      // owner. Retire the process: the session errors and the
+                      // next turn reopens and resumes it.
+                      yield* cancelPendingRequests(yield* DateTime.now);
+                      yield* connection.terminate;
+                      return;
+                    }
+                    yield* updateProviderThread(state, { status: "idle" });
+                    yield* updateProviderSession("ready", null);
+                  }),
                 ),
               ),
             );
@@ -1458,6 +1481,10 @@ export function makeZCodeAdapterV2(
               yield* connection.terminate;
               return;
             }
+            // Open asks would otherwise hold the tool call zcode must abort.
+            yield* sessionEventPermit.withPermits(1)(
+              Effect.flatMap(DateTime.now, cancelPendingRequests),
+            );
             // zcode settles a stopped turn with `turn.completed` (cancelled).
             // An app-server that cannot stop is retired instead.
             yield* request(

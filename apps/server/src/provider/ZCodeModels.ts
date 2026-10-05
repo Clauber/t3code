@@ -33,6 +33,8 @@ export interface ZCodeCatalog {
   readonly models: ReadonlyArray<ZCodeCatalogModel>;
   /** Slug of the session's current model, when reported. */
   readonly currentSlug: string | null;
+  /** Reasoning level of the session's current model, when reported. */
+  readonly currentReasoningLevel: string | null;
 }
 
 function field(input: unknown, key: string): unknown {
@@ -98,6 +100,8 @@ export function parseZCodeCatalog(settingsModel: unknown): ZCodeCatalog {
       currentProvider === undefined || currentModel === undefined
         ? null
         : `${currentProvider}/${currentModel}`,
+    currentReasoningLevel:
+      nonEmptyString(field(field(current, "options"), "reasoningLevel")) ?? null,
   };
 }
 
