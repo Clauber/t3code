@@ -1,0 +1,100 @@
+name: Fork upstream sync
+
+# Merges pingdotgg/t3code main into this fork's main every day, but only
+# pushes when the fork's own changes still typecheck and pass their tests.
+# A conflict or failure opens (or updates) one issue and leaves main alone.
+
+on:
+  schedule:
+    - cron: "17 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: fork-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'Clauber/t3code'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_TITLE: "Upstream sync needs attention"
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream main
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/pingdotgg/t3code.git
+          git fetch --no-tags upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already up to date with upstream."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "upstream=$(git rev-parse --short upstream/main)" >> "$GITHUB_OUTPUT"
+          if ! git merge --no-edit upstream/main; then
+            git diff --name-only --diff-filter=U > conflicts.txt
+            git merge --abort
+            echo "failure=conflict" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Vite+
+        if: steps.merge.outputs.changed == 'true'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Typecheck server
+        if: steps.merge.outputs.changed == 'true'
+        run: vp run --filter t3 typecheck
+
+      - name: Test fork changes
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          files=$(git diff --name-only upstream/main HEAD -- 'apps/server/**/*.test.ts' | sed 's#^apps/server/##')
+          if test -z "$files"; then echo "No fork-owned server tests."; exit 0; fi
+          cd apps/server && vp test run $files
+
+      - name: Push merged main
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin HEAD:main
+
+      - name: Report failure
+        if: failure()
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          {
+            echo "Syncing upstream \`${{ steps.merge.outputs.upstream }}\` into \`main\` failed; \`main\` was not changed."
+            echo
+            if test -s conflicts.txt; then
+              echo "Merge conflicts in:"
+              sed 's/^/- `/; s/$/`/' conflicts.txt
+            else
+              echo "Typecheck or fork tests failed after merging."
+            fi
+            echo
+            echo "Run: $run_url"
+          } > body.md
+          number=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number --jq '.[0].number')
+          if test -n "$number"; then
+            gh issue comment "$number" --body-file body.md
+          else
+            gh issue create --title "$ISSUE_TITLE" --body-file body.md
+          fi
