@@ -154,6 +154,11 @@ export const PullRequestCheck = Schema.Struct({
   url: Schema.NullOr(Schema.String),
   /** The base branch requires this check to merge. Absent where the host does not say. */
   required: Schema.optional(Schema.Boolean),
+  /** The CI workflow that owns this check, which is what the checks list groups by. */
+  workflowName: Schema.optional(Schema.NullOr(Schema.String)),
+  /** When the run started and finished, for its duration. Absent where the host does not say. */
+  startedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  completedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 export type PullRequestCheck = typeof PullRequestCheck.Type;
 

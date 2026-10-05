@@ -392,6 +392,12 @@ describe("pull request detail decoding", () => {
     expect(detail.checks.map((check) => [check.name, check.status])).toEqual([
       ["Prepare PR size config", "pending"],
     ]);
+    // GitHub's zero timestamp on a run still going is no finish time at all.
+    expect(detail.checks[0]).toMatchObject({
+      workflowName: "PR Size",
+      startedAt: "2026-08-11T17:01:04Z",
+      completedAt: null,
+    });
     expect(detail.checksState).toBe("pending");
   });
 
