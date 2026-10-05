@@ -28,7 +28,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { probeZCodeCatalog } from "../../orchestration-v2/Adapters/ZCodeCatalogProbe.ts";
 import { makeZCodeRpcConnection } from "../../orchestration-v2/Adapters/ZCodeRpc.ts";
