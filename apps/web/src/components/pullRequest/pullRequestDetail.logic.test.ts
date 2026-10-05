@@ -20,6 +20,9 @@ import {
   buildAddSelectionToAgentHandoff,
   classifyPullRequestChecks,
   groupPullRequestChecks,
+  groupPullRequestChecksByWorkflow,
+  pullRequestCheckDurationMs,
+  pullRequestCheckNameInWorkflow,
   describePullRequestChecks,
   resolveThreadPanelPullRequestAction,
   buildAskAboutPullRequestHandoff,
@@ -79,6 +82,50 @@ it("groups checks needing attention before running and completed checks without 
   expect(grouped.completed.map((check) => check.name)).toEqual(["check-0", "check-3", "check-6"]);
   expect(checks[0]?.status).toBe("success");
   expect(groupPullRequestChecks([])).toEqual({ attention: [], running: [], completed: [] });
+});
+
+describe("pull request checks by workflow", () => {
+  const check = (
+    name: string,
+    status: PullRequestCheck["status"],
+    workflowName: string | null,
+    timing: Pick<PullRequestCheck, "startedAt" | "completedAt"> = {},
+  ): PullRequestCheck => ({ name, status, description: null, url: null, workflowName, ...timing });
+
+  it("puts workflows needing attention first, then running ones, failures first within each", () => {
+    const groups = groupPullRequestChecksByWorkflow([
+      check("lint", "success", "Lint"),
+      check("unit", "success", "CI"),
+      check("build", "pending", "Deploy"),
+      check("e2e", "failure", "CI"),
+      check("vercel", "success", null),
+    ]);
+    expect(groups.map((group) => group.workflowName)).toEqual(["CI", "Deploy", "Lint", null]);
+    expect(groups[0]?.checks.map((entry) => entry.name)).toEqual(["e2e", "unit"]);
+    expect(groups[0]).toMatchObject({ attention: 1, running: 0 });
+    expect(groups[1]).toMatchObject({ attention: 0, running: 1 });
+  });
+
+  it("drops the workflow qualifier the deduper adds once the group heading carries it", () => {
+    expect(pullRequestCheckNameInWorkflow(check("CI / build", "success", "CI"))).toBe("build");
+    expect(pullRequestCheckNameInWorkflow(check("build", "success", null))).toBe("build");
+  });
+
+  it("times finished runs start to end and running ones against the clock", () => {
+    const startedAt = "2026-10-05T10:00:00Z";
+    const now = Date.parse("2026-10-05T10:02:30Z");
+    expect(
+      pullRequestCheckDurationMs(
+        check("a", "success", "CI", { startedAt, completedAt: "2026-10-05T10:01:00Z" }),
+        now,
+      ),
+    ).toBe(60_000);
+    expect(pullRequestCheckDurationMs(check("a", "pending", "CI", { startedAt }), now)).toBe(
+      150_000,
+    );
+    expect(pullRequestCheckDurationMs(check("a", "pending", "CI"), now)).toBeNull();
+    expect(pullRequestCheckDurationMs(check("a", "failure", "CI", { startedAt }), now)).toBeNull();
+  });
 });
 
 describe("pull request checkout commands", () => {

@@ -29,8 +29,6 @@ import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   PullRequestActorLabel,
-  PullRequestCheckStatusIcon,
-  pullRequestCheckStatusLabel,
   PullRequestLabelChip,
   PullRequestReviewOutcomeBadge,
   pullRequestReviewOutcomeLabel,
@@ -40,6 +38,7 @@ import {
 import { PullRequestLabelPicker } from "./PullRequestLabelPicker";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
+import { PullRequestChecksList } from "./PullRequestChecksList";
 import {
   latestPullRequestReviewOutcomes,
   orderPullRequestComments,
@@ -859,7 +858,17 @@ export function PullRequestSummaryTab({
         </div>
       </Section>
 
-      <Section key={`checks:${detail.url}`} title="Checks" defaultOpen={false}>
+      {/* Open by default while CI has something to watch or fix; a settled run stays tucked away. */}
+      <Section
+        key={`checks:${detail.url}`}
+        title="Checks"
+        defaultOpen={
+          !checksStale &&
+          detail.checks.some((check) =>
+            ["pending", "failure", "cancelled", "action-required"].includes(check.status),
+          )
+        }
+      >
         {checksStale ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <span>Check details are out of date.</span>
@@ -870,50 +879,13 @@ export function PullRequestSummaryTab({
         ) : detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
-          detail.checks.map((check, index) => {
-            const finding = { kind: "check", check } as const;
-            const failing = check.status === "failure" || check.status === "cancelled";
-            return (
-              <div
-                // Position too: the host decides how many runs share a name, and a repeated
-                // key would be a rendering fault on top of whatever the list already says.
-                key={`${index}:${check.name}:${check.url ?? ""}`}
-                className="group flex items-center gap-2 rounded-md pr-1 hover:bg-accent/60"
-              >
-                <button
-                  type="button"
-                  disabled={!check.url}
-                  onClick={() => check.url && openCheck(check.url)}
-                  className={cn(
-                    "flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 text-left text-xs leading-5 [&>svg]:mt-0.5",
-                    check.url ? "cursor-pointer" : "cursor-default",
-                  )}
-                >
-                  <PullRequestCheckStatusIcon status={check.status} />
-                  <span className="min-w-0 flex-1 wrap-anywhere">{check.name}</span>
-                  <span className="shrink-0 text-muted-foreground">
-                    {pullRequestCheckStatusLabel(check)}
-                  </span>
-                </button>
-                {/* Only where there is something to fix. A passing check has no failure to
-                      reproduce, and the button would be an invitation to waste a thread. */}
-                {onFixFinding && failing ? (
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    className="shrink-0"
-                    disabled={pendingFinding !== null && pendingFinding !== undefined}
-                    onClick={() => onFixFinding(finding)}
-                  >
-                    <HammerIcon className="size-3" />
-                    {pendingFinding === pullRequestFindingKey(finding)
-                      ? "Preparing..."
-                      : fixCheckLabel}
-                  </Button>
-                ) : null}
-              </div>
-            );
-          })
+          <PullRequestChecksList
+            checks={detail.checks}
+            onOpenCheck={openCheck}
+            pendingFinding={pendingFinding}
+            fixCheckLabel={fixCheckLabel}
+            onFixFinding={onFixFinding}
+          />
         )}
       </Section>
 

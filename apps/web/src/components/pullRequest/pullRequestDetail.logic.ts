@@ -403,6 +403,62 @@ export function groupPullRequestChecks(checks: ReadonlyArray<PullRequestCheck>) 
   };
 }
 
+export interface PullRequestCheckWorkflowGroup {
+  /** Null for checks no workflow owns: commit statuses and app-provided check runs. */
+  readonly workflowName: string | null;
+  readonly checks: ReadonlyArray<PullRequestCheck>;
+  readonly attention: number;
+  readonly running: number;
+}
+
+/**
+ * Checks grouped by the workflow that owns them, the way GitHub's checks tab reads. Workflows that
+ * need attention come first, then running ones, then finished ones; within a workflow the same
+ * order holds, so what needs a look is never below what does not. Otherwise the host's order.
+ */
+export function groupPullRequestChecksByWorkflow(
+  checks: ReadonlyArray<PullRequestCheck>,
+): ReadonlyArray<PullRequestCheckWorkflowGroup> {
+  const byWorkflow = new Map<string | null, PullRequestCheck[]>();
+  for (const check of checks) {
+    const key = check.workflowName ?? null;
+    const group = byWorkflow.get(key);
+    if (group) group.push(check);
+    else byWorkflow.set(key, [check]);
+  }
+  const rank = (group: PullRequestCheckWorkflowGroup) =>
+    group.attention > 0 ? 0 : group.running > 0 ? 1 : 2;
+  return [...byWorkflow.entries()]
+    .map(([workflowName, members]): PullRequestCheckWorkflowGroup => {
+      const { attention, running, completed } = groupPullRequestChecks(members);
+      return {
+        workflowName,
+        checks: [...attention, ...running, ...completed],
+        attention: attention.length,
+        running: running.length,
+      };
+    })
+    .toSorted((left, right) => rank(left) - rank(right));
+}
+
+/** A check's name inside its workflow group, without the `workflow / ` the deduper may add. */
+export function pullRequestCheckNameInWorkflow(check: PullRequestCheck): string {
+  const prefix = check.workflowName ? `${check.workflowName} / ` : null;
+  return prefix && check.name.startsWith(prefix) ? check.name.slice(prefix.length) : check.name;
+}
+
+/**
+ * How long a run took, or has been running. Null when the host gave no start, or when a finished
+ * run gave no end: a guess would be a lying number.
+ */
+export function pullRequestCheckDurationMs(check: PullRequestCheck, nowMs: number): number | null {
+  const started = check.startedAt ? Date.parse(check.startedAt) : Number.NaN;
+  if (Number.isNaN(started)) return null;
+  if (check.status === "pending") return Math.max(0, nowMs - started);
+  const completed = check.completedAt ? Date.parse(check.completedAt) : Number.NaN;
+  return Number.isNaN(completed) ? null : Math.max(0, completed - started);
+}
+
 export type ThreadPanelPullRequestAction = "resolve" | "ready" | "fix" | "merge";
 
 /**
