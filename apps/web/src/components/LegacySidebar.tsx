@@ -7,6 +7,8 @@ import {
   ChevronRightIcon,
   FolderPlusIcon,
   Globe2Icon,
+  PinIcon,
+  PinOffIcon,
   SearchIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -86,6 +88,7 @@ import { isMacPlatform } from "../lib/utils";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import {
+  readEnvironmentSupportsPinning,
   readThreadShell,
   useProjects,
   useThreadShells,
@@ -192,6 +195,7 @@ import {
   resolveThreadStatusPill,
   orderItemsByPreferredIds,
   shouldClearThreadSelectionOnMouseDown,
+  sortPinnedThreadsForSidebar,
   sortProjectsForSidebar,
   useSidebarRowSubscriptionLease,
   useThreadJumpHintVisibility,
@@ -355,6 +359,7 @@ interface SidebarThreadRowProps {
     threadRef?: ScopedThreadRef,
   ) => boolean;
   onFileDropThreads: (threadRef: ScopedThreadRef, files: File[]) => void;
+  togglePinThread: (threadRef: ScopedThreadRef, pinned: boolean) => Promise<void>;
 }
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
@@ -383,6 +388,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     attemptArchiveThread,
     openPrLink,
     onFileDropThreads,
+    togglePinThread,
     thread,
   } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
@@ -672,6 +678,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     },
     [],
   );
+  const isPinned = thread.pinnedAt != null;
+  const handlePinClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void togglePinThread(threadRef, isPinned);
+    },
+    [isPinned, threadRef, togglePinThread],
+  );
   const handleConfirmArchiveClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -735,6 +750,26 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         onContextMenu={handleRowContextMenu}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+          {/* Hover-revealed pin toggle; stays visible while the thread is pinned. */}
+          {readEnvironmentSupportsPinning(thread.environmentId) && (
+            <button
+              type="button"
+              data-thread-selection-safe
+              data-testid={`thread-pin-${thread.id}`}
+              aria-label={isPinned ? `Unpin ${thread.title}` : `Pin ${thread.title}`}
+              className={cn(
+                "group/pin size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm text-icon-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+                isPinned
+                  ? "inline-flex"
+                  : "hidden group-hover/menu-sub-item:inline-flex group-focus-within/menu-sub-item:inline-flex",
+              )}
+              onPointerDown={stopPropagationOnPointerDown}
+              onClick={handlePinClick}
+            >
+              <PinIcon className={cn("size-3", isPinned && "group-hover/pin:hidden")} />
+              {isPinned && <PinOffIcon className="hidden size-3 group-hover/pin:block" />}
+            </button>
+          )}
           {prStatus && pr && (
             <Tooltip>
               <TooltipTrigger
@@ -954,6 +989,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
 });
 
 interface SidebarProjectThreadListProps {
+  togglePinThread: (threadRef: ScopedThreadRef, pinned: boolean) => Promise<void>;
   projectKey: string;
   projectExpanded: boolean;
   hasOverflowingThreads: boolean;
@@ -1045,6 +1081,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     openPrLink,
     expandThreadListForProject,
     collapseThreadListForProject,
+    togglePinThread,
   } = props;
   const showMoreButtonRender = useMemo(() => <button type="button" />, []);
   const showLessButtonRender = useMemo(() => <button type="button" />, []);
@@ -1095,6 +1132,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
               cancelRename={cancelRename}
               attemptArchiveThread={attemptArchiveThread}
               openPrLink={openPrLink}
+              togglePinThread={togglePinThread}
             />
           );
         })}
@@ -1144,6 +1182,7 @@ interface SidebarProjectItemProps {
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   markThreadUnread: ReturnType<typeof useThreadActions>["markThreadUnread"];
+  togglePinThread: (threadRef: ScopedThreadRef, pinned: boolean) => Promise<void>;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
@@ -1166,6 +1205,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     archiveThread,
     deleteThread,
     markThreadUnread,
+    togglePinThread,
     threadJumpLabelByKey,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
@@ -2255,6 +2295,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           ...(thread.branch
             ? [{ id: "new-thread-on-branch", label: `New thread on ${thread.branch}` }]
             : []),
+          ...(readEnvironmentSupportsPinning(thread.environmentId)
+            ? [{ id: "toggle-pin", label: thread.pinnedAt != null ? "Unpin" : "Pin" }]
+            : []),
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
@@ -2305,6 +2348,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
       if (clicked === "mark-unread") {
         markThreadUnread(threadRef);
+        return;
+      }
+      if (clicked === "toggle-pin") {
+        await togglePinThread(threadRef, thread.pinnedAt != null);
         return;
       }
       if (clicked === "copy-path") {
@@ -2364,6 +2411,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       router,
       setOpenMobile,
       startThreadRename,
+      togglePinThread,
     ],
   );
 
@@ -2507,6 +2555,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         cancelRename={cancelRename}
         attemptArchiveThread={attemptArchiveThread}
         openPrLink={openPrLink}
+        togglePinThread={togglePinThread}
         expandThreadListForProject={expandThreadListForProject}
         collapseThreadListForProject={collapseThreadListForProject}
       />
@@ -2896,6 +2945,9 @@ interface SidebarProjectsContentProps {
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   markThreadUnread: ReturnType<typeof useThreadActions>["markThreadUnread"];
+  togglePinThread: (threadRef: ScopedThreadRef, pinned: boolean) => Promise<void>;
+  pinnedThreads: readonly SidebarThreadSummary[];
+  navigateToThread: (threadRef: ScopedThreadRef) => void;
   sortedProjects: readonly SidebarProjectSnapshot[];
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
@@ -2913,6 +2965,82 @@ interface SidebarProjectsContentProps {
   attachProjectListAutoAnimateRef: (node: HTMLElement | null) => void;
   projectsLength: number;
 }
+
+const SidebarPinnedThreadRow = memo(function SidebarPinnedThreadRow(props: {
+  thread: SidebarThreadSummary;
+  isActive: boolean;
+  navigateToThread: (threadRef: ScopedThreadRef) => void;
+  togglePinThread: (threadRef: ScopedThreadRef, pinned: boolean) => Promise<void>;
+}) {
+  const { thread, isActive, navigateToThread, togglePinThread } = props;
+  const threadRef = useMemo(
+    () => scopeThreadRef(thread.environmentId, thread.id),
+    [thread.environmentId, thread.id],
+  );
+  const localLastVisitedAt = useUiStateStore(
+    (state) => state.threadLastVisitedAtById[scopedThreadKey(threadRef)],
+  );
+  const threadStatus = resolveThreadStatusPill({
+    thread: {
+      ...thread,
+      lastVisitedAt: resolveThreadLastVisitedAt(thread.lastVisitedAt, localLastVisitedAt),
+    },
+  });
+  const handleContextMenu = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault();
+      const api = readLocalApi();
+      if (!api) return;
+      void (async () => {
+        const clicked = await api.contextMenu.show([{ id: "unpin", label: "Unpin" }], {
+          x: event.clientX,
+          y: event.clientY,
+        });
+        if (clicked === "unpin") await togglePinThread(threadRef, true);
+      })();
+    },
+    [threadRef, togglePinThread],
+  );
+
+  const handleUnpinClick = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      void togglePinThread(threadRef, true);
+    },
+    [threadRef, togglePinThread],
+  );
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        size="sm"
+        isActive={isActive}
+        render={<div role="button" tabIndex={0} />}
+        data-testid={`pinned-thread-row-${thread.id}`}
+        onClick={() => navigateToThread(threadRef)}
+        onKeyDown={(event) => {
+          if (event.target === event.currentTarget && event.key === "Enter") {
+            navigateToThread(threadRef);
+          }
+        }}
+        onContextMenu={handleContextMenu}
+      >
+        <button
+          type="button"
+          aria-label={`Unpin ${thread.title}`}
+          data-testid={`pinned-thread-unpin-${thread.id}`}
+          className="group/pin inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm text-icon-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+          onClick={handleUnpinClick}
+        >
+          <PinIcon className="size-3 group-hover/pin:hidden" />
+          <PinOffIcon className="hidden size-3 group-hover/pin:block" />
+        </button>
+        {threadStatus && <ThreadStatusLabel status={threadStatus} />}
+        <span className="min-w-0 flex-1 truncate text-sm">{thread.title}</span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+});
 
 const SidebarProjectsContent = memo(function SidebarProjectsContent(
   props: SidebarProjectsContentProps,
@@ -2939,6 +3067,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     archiveThread,
     deleteThread,
     markThreadUnread,
+    togglePinThread,
+    pinnedThreads,
+    navigateToThread,
     sortedProjects,
     expandedThreadListsByProject,
     activeRouteProjectKey,
@@ -3020,6 +3151,27 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         </SidebarGroup>
       ) : null}
       <LocalSecondaryStatus />
+      {pinnedThreads.length > 0 ? (
+        <SidebarGroup>
+          <div className="mb-1 flex h-6 items-center pl-2 pr-1.5">
+            <span className="text-xs font-medium text-sidebar-muted-foreground/80">Pinned</span>
+          </div>
+          <SidebarMenu>
+            {pinnedThreads.map((thread) => {
+              const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+              return (
+                <SidebarPinnedThreadRow
+                  key={threadKey}
+                  thread={thread}
+                  isActive={routeThreadKey === threadKey}
+                  navigateToThread={navigateToThread}
+                  togglePinThread={togglePinThread}
+                />
+              );
+            })}
+          </SidebarMenu>
+        </SidebarGroup>
+      ) : null}
       <SidebarGroup>
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
           <span className="text-xs font-medium text-sidebar-muted-foreground/80">Projects</span>
@@ -3080,6 +3232,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                         archiveThread={archiveThread}
                         deleteThread={deleteThread}
                         markThreadUnread={markThreadUnread}
+                        togglePinThread={togglePinThread}
                         threadJumpLabelByKey={threadJumpLabelByKey}
                         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                         expandThreadListForProject={expandThreadListForProject}
@@ -3114,6 +3267,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 archiveThread={archiveThread}
                 deleteThread={deleteThread}
                 markThreadUnread={markThreadUnread}
+                togglePinThread={togglePinThread}
                 threadJumpLabelByKey={threadJumpLabelByKey}
                 attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                 expandThreadListForProject={expandThreadListForProject}
@@ -3149,7 +3303,24 @@ export default function LegacySidebar() {
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
   const updateSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
-  const { archiveThread, deleteThread, markThreadUnread } = useThreadActions();
+  const { archiveThread, deleteThread, markThreadUnread, pinThread, confirmAndUnpinThread } =
+    useThreadActions();
+  const togglePinThread = useCallback(
+    async (threadRef: ScopedThreadRef, pinned: boolean) => {
+      const result = pinned ? await confirmAndUnpinThread(threadRef) : await pinThread(threadRef);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: pinned ? "Failed to unpin thread" : "Failed to pin thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    },
+    [confirmAndUnpinThread, pinThread],
+  );
   const { isMobile, setOpenMobile } = useSidebar();
   const routeTarget = useParams({
     strict: false,
@@ -3277,6 +3448,10 @@ export default function LegacySidebar() {
             [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
         ),
       ),
+    [sidebarThreads],
+  );
+  const pinnedThreads = useMemo(
+    () => sortPinnedThreadsForSidebar(sidebarThreads.filter((thread) => thread.pinnedAt != null)),
     [sidebarThreads],
   );
   // Resolve the active route's project key to a logical key so it matches the
@@ -3802,6 +3977,9 @@ export default function LegacySidebar() {
         archiveThread={archiveThread}
         deleteThread={deleteThread}
         markThreadUnread={markThreadUnread}
+        togglePinThread={togglePinThread}
+        pinnedThreads={pinnedThreads}
+        navigateToThread={navigateToThread}
         sortedProjects={sortedProjects}
         expandedThreadListsByProject={expandedThreadListsByProject}
         activeRouteProjectKey={activeRouteProjectKey}
