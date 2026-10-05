@@ -49,6 +49,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -65,6 +66,7 @@ import {
   ZCODE_DEFAULT_MODEL_SLUG,
   ZCODE_REASONING_OPTION_ID,
   type ZCodeCatalog,
+  type ZCodeCatalogModel,
 } from "../../provider/ZCodeModels.ts";
 import { providerMessageTextWithAttachmentPaths } from "../AttachmentPrompt.ts";
 import * as IdAllocator from "../IdAllocator.ts";
@@ -76,6 +78,13 @@ import {
 } from "../ProviderAdapterDriver.ts";
 import { makeProviderFailure } from "../ProviderFailure.ts";
 import { turnScopedSelectionTransition } from "../ProviderSelectionTransition.ts";
+import {
+  isZCodeReasoningLevelError,
+  probeZCodeCatalog,
+  validateZCodeModel,
+  zcodeSetModelParams,
+  type ZCodeCatalogProbeResult,
+} from "./ZCodeCatalogProbe.ts";
 import {
   makeZCodeRpcConnection,
   zcodeRecordField as recordField,
@@ -201,6 +210,17 @@ export interface ZCodeAdapterV2Options {
   readonly serverConfig: ServerConfig.ServerConfig["Service"];
   /** Receives the model catalog each session's snapshot reports. */
   readonly onCatalog?: (catalog: ZCodeCatalog) => Effect.Effect<void>;
+  /** The instance's full model list, including personal config models. */
+  readonly knownModels?: () => ReadonlyArray<ZCodeCatalogModel>;
+  /**
+   * Validates personal config models in a throwaway session once a thread
+   * opens. `claim` returns true for the one session that should run it.
+   */
+  readonly modelValidation?: {
+    readonly claim: () => boolean;
+    readonly candidates: () => ReadonlyArray<ZCodeCatalogModel>;
+    readonly onResult: (result: ZCodeCatalogProbeResult) => Effect.Effect<void>;
+  };
 }
 
 /** T3 runtime modes → zcode permission modes. */
@@ -1203,6 +1223,14 @@ export function makeZCodeAdapterV2(
         if (options.onCatalog !== undefined && catalog.models.length > 0) {
           yield* options.onCatalog(catalog).pipe(Effect.ignore, Effect.forkIn(scope));
         }
+        const validation = options.modelValidation;
+        if (validation !== undefined && validation.claim()) {
+          yield* probeZCodeCatalog(connection.request, cwd, validation.candidates()).pipe(
+            Effect.flatMap(validation.onResult),
+            Effect.ignore,
+            Effect.forkIn(scope),
+          );
+        }
         appliedMode = resumeId === null ? mode : null;
         appliedModelKey = null;
         baselineModel =
@@ -1249,6 +1277,10 @@ export function makeZCodeAdapterV2(
         return providerThread;
       });
 
+      const findModel = (slug: string) =>
+        catalog.models.find((model) => model.slug === slug) ??
+        options.knownModels?.().find((model) => model.slug === slug);
+
       /** Reasserts the mode and model before every turn; a session keeps its last ones. */
       const applyTurnSettings = Effect.fnUntraced(function* (
         sessionId: string,
@@ -1268,7 +1300,7 @@ export function makeZCodeAdapterV2(
         if (parsed === null) {
           return yield* protocolError(`ZCode model '${slug}' must use provider/model format`);
         }
-        const known = catalog.models.find((model) => model.slug === slug);
+        const known = findModel(slug);
         const requestedLevel = isDefault
           ? (baselineModel!.level ?? undefined)
           : getModelSelectionStringOptionValue(modelSelection, ZCODE_REASONING_OPTION_ID);
@@ -1280,16 +1312,16 @@ export function makeZCodeAdapterV2(
             : (known?.defaultReasoningLevel ?? undefined);
         const key = `${slug}$${level ?? ""}`;
         if (key === appliedModelKey) return;
-        yield* request("session/setModel", {
-          sessionId,
-          model: {
-            providerId: parsed.providerId,
-            modelId: parsed.modelId,
-            ...(level === undefined ? {} : { options: { reasoningLevel: level } }),
-          },
-          // A T3 pick must not rewrite the user's zcode workspace default.
-          persistAsWorkspaceLastUsed: false,
-        });
+        const applied = yield* request(
+          "session/setModel",
+          zcodeSetModelParams(sessionId, parsed, level),
+        ).pipe(Effect.result);
+        if (Result.isFailure(applied)) {
+          // A config model whose level is not known yet: find one it accepts.
+          if (!isZCodeReasoningLevelError(applied.failure)) return yield* applied.failure;
+          const found = yield* validateZCodeModel(connection.request, sessionId, parsed);
+          if (!found.accepted) return yield* applied.failure;
+        }
         appliedModelKey = isDefault ? null : key;
         const updatedAt = yield* DateTime.now;
         sessionEntity = { ...sessionEntity, model: modelSelection.model, updatedAt };
@@ -1312,7 +1344,7 @@ export function makeZCodeAdapterV2(
           if (selection.instanceId !== options.instanceId) return undefined;
           const slug =
             selection.model === ZCODE_DEFAULT_MODEL_SLUG ? catalog.currentSlug : selection.model;
-          return catalog.models.find((model) => model.slug === slug)?.contextWindow ?? undefined;
+          return slug === null ? undefined : (findModel(slug)?.contextWindow ?? undefined);
         },
         ensureThread: (threadInput) =>
           registerThread(threadInput).pipe(
