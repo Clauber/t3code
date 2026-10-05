@@ -16,11 +16,13 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ServerConfig from "../../config.ts";
@@ -100,6 +102,7 @@ const makeFakeZCode = Effect.gen(function* () {
   const allCalls: Array<Rec> = [];
   let stdinBuffer = "";
   let refuseResume = false;
+  let holdSend = false;
   let seq = 1;
 
   const write = (record: Rec) =>
@@ -146,6 +149,7 @@ const makeFakeZCode = Effect.gen(function* () {
           },
         };
       case "session/send":
+        if (holdSend) return null;
         return { id, result: { accepted: true, inputId: "in-1" } };
       default:
         return { id, result: {} };
@@ -214,6 +218,9 @@ const makeFakeZCode = Effect.gen(function* () {
     takeCall,
     takeAnswer,
     allCalls: () => allCalls,
+    holdSends: () => {
+      holdSend = true;
+    },
     refuseNextResume: () => {
       refuseResume = true;
     },
@@ -659,6 +666,105 @@ describe("ZCodeAdapterV2", () => {
       Effect.scoped,
       Effect.provide(testLayer),
     ),
+  );
+
+  it.effect("retires the app-server when session/send times out", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeZCode;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* ensureThread(runtime);
+      fake.holdSends();
+      const turn = yield* startTurn(runtime, providerThread).pipe(Effect.exit, Effect.forkScoped);
+      yield* fake.takeCall("session/send");
+      yield* fake.write(permissionRequest("srv-1"));
+      yield* takeEvent(isRequest);
+      yield* TestClock.adjust("31 seconds");
+      const exit = yield* Fiber.join(turn);
+      assert.isTrue(exit._tag === "Failure");
+      assert.deepEqual((yield* fake.takeAnswer("srv-1"))["result"], DENY);
+      const sessionError = yield* takeEvent(
+        (event): event is Extract<ProviderAdapterV2Event, { type: "provider_session.updated" }> =>
+          event.type === "provider_session.updated" && event.providerSession.status === "error",
+      );
+      assert.equal(sessionError.providerSession.status, "error");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("restores the session's own model when the selection returns to default", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeZCode;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* ensureThread(runtime);
+      yield* startTurn(runtime, providerThread, {
+        model: selection("zai-fake/glm-5.3-flash", [{ id: "reasoning", value: "low" }]),
+      });
+      const picked = yield* fake.takeCall("session/setModel");
+      assert.deepEqual(picked["params"], {
+        sessionId: FAKE_SESSION,
+        model: {
+          providerId: "zai-fake",
+          modelId: "glm-5.3-flash",
+          options: { reasoningLevel: "low" },
+        },
+        persistAsWorkspaceLastUsed: false,
+      });
+      yield* fake.event("turn.completed", { response: "ok", resultType: "success" });
+      yield* takeEvent(isTerminal);
+
+      yield* startTurn(runtime, providerThread, { runOrdinal: 2 });
+      const restored = yield* fake.takeCall("session/setModel");
+      assert.deepEqual((restored["params"] as Rec)["model"], {
+        providerId: "zai-fake",
+        modelId: "glm-5.3-flash",
+        options: { reasoningLevel: "max" },
+      });
+      yield* fake.event("turn.completed", { response: "ok", resultType: "success" });
+      yield* takeEvent(isTerminal);
+
+      // Staying on default sends nothing further.
+      yield* startTurn(runtime, providerThread, { runOrdinal: 3 });
+      yield* fake.takeCall("session/send");
+      assert.equal(
+        fake.allCalls().filter((call) => call["method"] === "session/setModel").length,
+        2,
+      );
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("refuses a permission request that no turn owns", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeZCode;
+      const { runtime } = yield* openRuntime(fake);
+      yield* ensureThread(runtime);
+      yield* fake.write(permissionRequest("srv-1"));
+      assert.deepEqual((yield* fake.takeAnswer("srv-1"))["result"], DENY);
+      yield* fake.write({
+        id: "srv-q",
+        method: "interaction/requestUserInput",
+        params: { requestId: "uq-1", prompt: "Pick one", choices: ["a"] },
+      });
+      assert.deepEqual((yield* fake.takeAnswer("srv-q"))["result"], { action: "cancel" });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("denies open asks before stopping", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeZCode;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* ensureThread(runtime);
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeCall("session/send");
+      yield* fake.write(permissionRequest("srv-1"));
+      const pending = yield* takeEvent(isRequest);
+      yield* runtime.interruptTurn({
+        providerThread,
+        providerTurnId: pending.runtimeRequest.providerTurnId!,
+      });
+      assert.deepEqual((yield* fake.takeAnswer("srv-1"))["result"], DENY);
+      const cancelled = yield* takeEvent(isRequest);
+      assert.equal(cancelled.runtimeRequest.status, "cancelled");
+      yield* fake.takeCall("session/stop");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 });
 
