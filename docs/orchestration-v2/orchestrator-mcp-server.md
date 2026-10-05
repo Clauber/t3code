@@ -54,6 +54,12 @@ The MCP HTTP server resolves the bearer token and supplies the resulting
 `McpInvocationScope` to tool handlers. Orchestration handlers additionally
 check the `orchestration` capability before reading or mutating state.
 
+A token the registry does not know falls back to an environment bearer session
+(`t3 auth session issue`) with `orchestration:operate`. That makes a headless
+client caller with no thread of its own, so another harness on the machine can
+launch and steer T3 threads. Browser cookie and DPoP sessions never pass this
+fallback; MCP must not be reachable through ambient browser credentials.
+
 ## Provider Injection
 
 ### Codex V2

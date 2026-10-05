@@ -13,10 +13,16 @@ import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
 import { McpProtocol, McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { PreviewAutomationError } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  type EnvironmentId,
+  PreviewAutomationError,
+} from "@t3tools/contracts";
 
 import packageJson from "../../package.json" with { type: "json" };
+import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -62,7 +68,7 @@ import {
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
     error: "invalid_mcp_credential",
-    message: "A valid provider-scoped MCP bearer credential is required.",
+    message: "A valid provider-scoped MCP or environment session bearer credential is required.",
   },
   {
     status: 401,
@@ -99,16 +105,57 @@ export const normalizeMcpHttpResponse = (
     : response;
 };
 
-const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
-  Effect.map((registry): McpAuthMiddleware =>
-    Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
+/**
+ * Scope for an environment bearer session (`t3 auth session issue`), so a headless
+ * client on the same environment, such as another agent harness, can use the
+ * orchestration tools without a provider session. Cookies and DPoP sessions stay
+ * out: a browser must never reach MCP through ambient credentials.
+ */
+export const clientInvocationScope = (
+  environmentId: EnvironmentId,
+  session: EnvironmentAuth.AuthenticatedSession,
+  issuedAt: number,
+): McpInvocationContext.McpInvocationScope | undefined =>
+  session.method === "bearer-access-token" && session.scopes.includes(AuthOrchestrationOperateScope)
+    ? {
+        environmentId,
+        requestNamespace: `client:${session.sessionId}`,
+        thread: undefined,
+        client: {
+          sessionId: session.sessionId,
+          label: session.subject,
+          runtimeModeCeiling: "full-access",
+        },
+        capabilities: new Set(["orchestration", "worktree", "pull-requests"] as const),
+        issuedAt,
+      }
+    : undefined;
+
+export const makeMcpAuthMiddleware = Effect.gen(function* () {
+  const registry = yield* McpSessionRegistry.McpSessionRegistry;
+  const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+  const environment = yield* ServerEnvironment.ServerEnvironment;
+  const environmentId = yield* environment.getEnvironmentId;
+
+  const resolveClient = Effect.fn("McpHttpServer.resolveClientCredential")(function* (
+    request: HttpServerRequest.HttpServerRequest,
+  ) {
+    const session = yield* environmentAuth.authenticateHttpRequest(request).pipe(Effect.option);
+    if (Option.isNone(session)) return undefined;
+    return clientInvocationScope(environmentId, session.value, yield* Clock.currentTimeMillis);
+  });
+
+  const middleware: McpAuthMiddleware = Effect.fn("McpHttpServer.authenticateRequest")(
+    function* (httpEffect) {
       const request = yield* HttpServerRequest.HttpServerRequest;
       const authorization = request.headers.authorization;
       const token =
         authorization?.startsWith("Bearer ") === true
           ? authorization.slice("Bearer ".length).trim()
           : "";
-      const invocation = yield* registry.resolve(token);
+      const invocation =
+        (yield* registry.resolve(token)) ??
+        (token.length === 0 ? undefined : yield* resolveClient(request));
       if (!invocation) {
         // Without this the only symptom of a dead credential is the agent
         // quietly losing the whole `t3-code` toolkit for the rest of its
@@ -122,10 +169,10 @@ const makeMcpAuthMiddleware = McpSessionRegistry.McpSessionRegistry.pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
         Effect.map(normalizeMcpHttpResponse),
       );
-    }),
-  ),
-  Effect.withSpan("McpHttpServer.makeAuthMiddleware"),
-);
+    },
+  );
+  return middleware;
+}).pipe(Effect.withSpan("McpHttpServer.makeAuthMiddleware"));
 
 const McpAuthMiddlewareLive = HttpRouter.middleware<{
   provides: McpInvocationContext.McpInvocationContext;
