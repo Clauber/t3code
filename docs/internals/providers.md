@@ -36,6 +36,13 @@ Forks use Pi's CLI in the destination directory because RPC session switching re
 session's cwd. Provider switches still use portable handoff summaries.
 See the [adapter](../../apps/server/src/orchestration-v2/Adapters/PiAdapterV2.ts).
 
+ZCode runs the user's own `zcode app-server` and speaks its native protocol, one process per
+provider session. Opening a zcode session starts the user's MCP servers, so health checks only run
+`zcode version`; the model catalog comes from the snapshot of a session the user opened or from an
+explicit model refresh. A permission answer must echo one of the request's own options, and its
+"always allow" option persists for the whole project, so accept-for-session answers once and T3
+remembers the grant. See the [adapter](../../apps/server/src/orchestration-v2/Adapters/ZCodeAdapterV2.ts).
+
 Antigravity separates account profiles per instance while sharing installed executables across the
 environment. It forces file-based credential storage because the native macOS keychain entry would
 otherwise be shared across instances. The launch environment removes ambient Google credentials,
