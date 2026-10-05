@@ -19,6 +19,7 @@ import {
   type OpenCodeAdapterV2DriverEnv,
 } from "./Adapters/OpenCodeAdapterV2.ts";
 import { PiAdapterV2Driver, type PiAdapterV2DriverEnv } from "./Adapters/PiAdapterV2.ts";
+import { ZCodeAdapterV2Driver, type ZCodeAdapterV2DriverEnv } from "./Adapters/ZCodeAdapterV2.ts";
 import type { AnyProviderAdapterDriver } from "./ProviderAdapterDriver.ts";
 
 export type BuiltInProviderAdapterDriversV2Env =
@@ -28,7 +29,8 @@ export type BuiltInProviderAdapterDriversV2Env =
   | CursorAdapterV2DriverEnv
   | GrokAdapterV2DriverEnv
   | OpenCodeAdapterV2DriverEnv
-  | PiAdapterV2DriverEnv;
+  | PiAdapterV2DriverEnv
+  | ZCodeAdapterV2DriverEnv;
 
 const BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2: ReadonlyArray<
   AnyProviderAdapterDriver<BuiltInProviderAdapterDriversV2Env>
@@ -39,6 +41,7 @@ const BUILT_IN_PROVIDER_ADAPTER_DRIVERS_V2: ReadonlyArray<
   OpenCodeAdapterV2Driver,
   GrokAdapterV2Driver,
   PiAdapterV2Driver,
+  ZCodeAdapterV2Driver,
   AcpRegistryAdapterV2Driver,
 ];
 
