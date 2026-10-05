@@ -3,14 +3,17 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { parseZCodeCatalog } from "../ZCodeModels.ts";
-import { checkZCodeProviderStatus } from "./ZCodeProvider.ts";
+import { combineZCodeCatalog } from "../ZCodeModels.ts";
+import { checkZCodeProviderStatus, materializeZCodePersonalConfig } from "./ZCodeProvider.ts";
 
 const encoder = new TextEncoder();
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 function versionSpawner(version: string) {
   return ChildProcessSpawner.make((command) => {
@@ -97,6 +100,65 @@ describe("ZCodeProvider", () => {
         signedIn.models.map((model) => model.slug),
         ["default"],
       );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("merges personal configs into a private file and lists their models at once", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-zcode-home-" });
+      const write = (relative: string, content: string) =>
+        Effect.gen(function* () {
+          const file = path.join(home, relative);
+          yield* fileSystem.makeDirectory(path.dirname(file), { recursive: true });
+          yield* fileSystem.writeFileString(file, content);
+        });
+      yield* write(
+        ".zcode/v2/provider_config.json",
+        encodeJson({
+          schemaVersion: 1,
+          config: {
+            providerOrder: ["9router"],
+            providerConfigRules: {
+              providerRules: [
+                {
+                  providerId: "9router",
+                  providerName: "9Router",
+                  config: { modelOrder: ["kiro/claude-opus-5"], access: { apiKey: "secret" } },
+                },
+              ],
+            },
+            modelConfigRules: { providerModelRules: [], manualProviderModelRules: [] },
+          },
+        }),
+      );
+      yield* write(".zcode/headless/provider_config.json", "{ not json");
+      const target = path.join(home, "state", "provider_config.json");
+      const merged = yield* materializeZCodePersonalConfig({}, home, target);
+      assert.equal(merged.path, target);
+      assert.equal((yield* fileSystem.stat(target)).mode & 0o777, 0o600);
+      assert.include(yield* fileSystem.readFileString(target), "manualProviderModelRules");
+
+      const snapshot = yield* checkZCodeProviderStatus(
+        settings,
+        { HOME: home, ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: target },
+        combineZCodeCatalog({ configModels: merged.models, snapshot: null, validation: null }),
+      ).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, versionSpawner("0.16.9")),
+      );
+      assert.deepEqual(
+        snapshot.models.map((model) => [model.slug, model.name]),
+        [
+          ["default", "ZCode default"],
+          ["9router/kiro/claude-opus-5", "kiro/claude-opus-5 · 9Router"],
+        ],
+      );
+
+      // Nothing usable leaves zcode on its own config resolution.
+      const empty = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-zcode-empty-" });
+      const none = yield* materializeZCodePersonalConfig({}, empty, path.join(empty, "out.json"));
+      assert.deepEqual(none, { path: null, models: [] });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

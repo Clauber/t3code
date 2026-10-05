@@ -5,12 +5,16 @@
  *
  * zcode state (sessions, settings, credentials, MCP config) lives in the
  * user's own `~/.zcode`, so continuation identity uses the default grouping.
- * The model catalog is learned from sessions the user opens, or from an
- * explicit model refresh; background health checks never open a session.
+ * Models come from the user's personal provider configs at once; the first
+ * session the user opens (or an explicit model refresh) validates them and
+ * learns reasoning levels. Background health checks never open a session.
  */
 import { ProviderDriverKind, ZCodeSettings } from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as NodeOS from "node:os";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -31,6 +35,7 @@ import {
   buildInitialZCodeProviderSnapshot,
   checkZCodeProviderStatus,
   discoverZCodeCatalog,
+  materializeZCodePersonalConfig,
 } from "../Layers/ZCodeProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
@@ -46,7 +51,11 @@ import {
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
 import type { ServerProviderShape } from "../Services/ServerProvider.ts";
-import type { ZCodeCatalog } from "../ZCodeModels.ts";
+import {
+  combineZCodeCatalog,
+  type ZCodeCatalog,
+  type ZCodeModelValidation,
+} from "../ZCodeModels.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 
 const decodeZCodeSettings = Schema.decodeSync(ZCodeSettings);
@@ -78,6 +87,7 @@ export type ZCodeDriverEnv =
   | ZCodeAdapterV2DriverEnv
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
   | Path.Path
@@ -101,7 +111,29 @@ export const ZCodeDriver: ProviderDriver<ZCodeSettings, ZCodeDriverEnv> = {
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const serverConfig = yield* ServerConfig.ServerConfig;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
-      const processEnv = mergeProviderInstanceEnvironment(environment, hostEnvironment);
+      const crypto = yield* Crypto.Crypto;
+      const instanceEnv = mergeProviderInstanceEnvironment(environment, hostEnvironment);
+      // Every zcode process of this instance uses one merged personal
+      // provider config, so all of the user's providers are selectable.
+      // Hashed so case-only instance ids stay apart on case-insensitive disks.
+      const instanceKey = yield* crypto
+        .digest("SHA-256", new TextEncoder().encode(instanceId))
+        .pipe(
+          Effect.map(Encoding.encodeHex),
+          Effect.orElseSucceed(() => String(instanceId)),
+        );
+      const personalConfig = yield* materializeZCodePersonalConfig(
+        instanceEnv,
+        instanceEnv.HOME?.trim() || instanceEnv.USERPROFILE?.trim() || NodeOS.homedir(),
+        path.join(serverConfig.stateDir, "providers", "zcode", instanceKey, "provider_config.json"),
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+      const processEnv: NodeJS.ProcessEnv =
+        personalConfig.path === null
+          ? instanceEnv
+          : { ...instanceEnv, ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalConfig.path };
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -115,13 +147,19 @@ export const ZCodeDriver: ProviderDriver<ZCodeSettings, ZCodeDriverEnv> = {
       });
       const effectiveConfig = { ...config, enabled } satisfies ZCodeSettings;
 
-      let catalog: ZCodeCatalog | null = null;
-      let snapshot: ServerProviderShape | null = null;
-      const rememberCatalog = (next: ZCodeCatalog) =>
-        Effect.suspend(() => {
-          catalog = next;
-          return snapshot === null ? Effect.void : snapshot.refresh.pipe(Effect.asVoid);
+      let sessionSnapshot: ZCodeCatalog | null = null;
+      let validation: ReadonlyMap<string, ZCodeModelValidation> | null = null;
+      let validationClaimed = false;
+      const currentCatalog = () =>
+        combineZCodeCatalog({
+          configModels: personalConfig.models,
+          snapshot: sessionSnapshot,
+          validation,
         });
+      let snapshot: ServerProviderShape | null = null;
+      const publish = Effect.suspend(() =>
+        snapshot === null ? Effect.void : snapshot.refresh.pipe(Effect.asVoid),
+      );
 
       const orchestrationAdapter = makeZCodeAdapterV2({
         instanceId,
@@ -130,11 +168,31 @@ export const ZCodeDriver: ProviderDriver<ZCodeSettings, ZCodeDriverEnv> = {
         spawner,
         idAllocator,
         serverConfig,
-        onCatalog: rememberCatalog,
+        knownModels: () => currentCatalog().models,
+        onCatalog: (next) =>
+          Effect.suspend(() => {
+            sessionSnapshot = next;
+            return publish;
+          }),
+        // The first session the user opens validates config models once.
+        modelValidation: {
+          claim: () => {
+            if (validationClaimed || personalConfig.models.length === 0) return false;
+            validationClaimed = true;
+            return true;
+          },
+          candidates: () => personalConfig.models,
+          onResult: (result) =>
+            Effect.suspend(() => {
+              validation = result.validation;
+              if (result.snapshot.models.length > 0) sessionSnapshot = result.snapshot;
+              return publish;
+            }),
+        },
       });
 
       const checkProvider = Effect.suspend(() =>
-        checkZCodeProviderStatus(effectiveConfig, processEnv, catalog),
+        checkZCodeProviderStatus(effectiveConfig, processEnv, currentCatalog()),
       ).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -151,7 +209,9 @@ export const ZCodeDriver: ProviderDriver<ZCodeSettings, ZCodeDriverEnv> = {
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
         initialSnapshot: (settings) =>
-          buildInitialZCodeProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+          buildInitialZCodeProviderSnapshot(settings.provider, currentCatalog()).pipe(
+            Effect.map(stampIdentity),
+          ),
         checkProvider,
       }).pipe(
         Effect.mapError(
@@ -167,8 +227,20 @@ export const ZCodeDriver: ProviderDriver<ZCodeSettings, ZCodeDriverEnv> = {
       snapshot = managedSnapshot;
 
       const refreshModels = () =>
-        discoverZCodeCatalog(effectiveConfig, processEnv, serverConfig.cwd).pipe(
-          Effect.flatMap(rememberCatalog),
+        discoverZCodeCatalog(
+          effectiveConfig,
+          processEnv,
+          serverConfig.cwd,
+          personalConfig.models,
+        ).pipe(
+          Effect.flatMap((result) =>
+            Effect.suspend(() => {
+              validationClaimed = true;
+              validation = result.validation;
+              if (result.snapshot.models.length > 0) sessionSnapshot = result.snapshot;
+              return publish;
+            }),
+          ),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.mapError(
             (cause) =>

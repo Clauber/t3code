@@ -7,16 +7,18 @@
  * files report "unknown", never "signed out", because a configuration this
  * probe does not know about may still work.
  *
- * The model catalog needs a zcode session, and opening one starts the user's
- * MCP servers. Background checks therefore never open one. The catalog comes
- * from an explicit model refresh (a throwaway deferred session) or from the
- * snapshot of a session the user started.
+ * Models come from the user's personal provider configs, which are plain
+ * files, so a new instance lists them immediately. Opening a zcode session
+ * starts the user's MCP servers, so background checks never open one;
+ * validating those models and reading reasoning levels waits for an explicit
+ * model refresh or a session the user starts.
  */
 import {
   type CustomModelSetting,
   type ServerProviderModel,
   type ZCodeSettings,
 } from "@t3tools/contracts";
+import { causeErrorTag } from "@t3tools/shared/observability";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -25,13 +27,11 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import {
-  makeZCodeRpcConnection,
-  zcodeRecordField as recordField,
-  zcodeRecordString as recordString,
-} from "../../orchestration-v2/Adapters/ZCodeRpc.ts";
+import { probeZCodeCatalog } from "../../orchestration-v2/Adapters/ZCodeCatalogProbe.ts";
+import { makeZCodeRpcConnection } from "../../orchestration-v2/Adapters/ZCodeRpc.ts";
 import {
   buildServerProvider,
   isCommandMissingCause,
@@ -42,10 +42,13 @@ import {
 } from "../providerSnapshot.ts";
 import {
   EMPTY_ZCODE_MODEL_CAPABILITIES,
-  parseZCodeCatalog,
+  mergeZCodePersonalConfigs,
   ZCODE_DEFAULT_MODEL_SLUG,
+  zcodeConfigModels,
+  zcodePersonalConfigCandidates,
   zcodeServerModels,
   type ZCodeCatalog,
+  type ZCodeCatalogModel,
 } from "../ZCodeModels.ts";
 
 const ZCODE_PRESENTATION = {
@@ -56,7 +59,8 @@ const ZCODE_PRESENTATION = {
 } as const;
 
 const VERSION_PROBE_TIMEOUT_MS = 8_000;
-const CATALOG_PROBE_TIMEOUT_MS = 60_000;
+// Covers process start, session hooks, and the 90s validation budget.
+const CATALOG_PROBE_TIMEOUT_MS = 150_000;
 
 const ZCODE_DEFAULT_MODEL: ServerProviderModel = {
   slug: ZCODE_DEFAULT_MODEL_SLUG,
@@ -105,13 +109,15 @@ const hasZCodeCredentials = (environment: NodeJS.ProcessEnv) =>
   });
 
 /**
- * Reads the catalog from a throwaway deferred session. This starts the
- * user's MCP servers, so it runs only for an explicit model refresh.
+ * Reads the session snapshot's models and validates config models in a
+ * throwaway deferred session. This starts the user's MCP servers, so it runs
+ * only for an explicit model refresh.
  */
 export const discoverZCodeCatalog = (
   settings: ZCodeSettings,
   environment: NodeJS.ProcessEnv,
   cwd: string,
+  candidates: ReadonlyArray<ZCodeCatalogModel>,
 ) =>
   Effect.gen(function* () {
     const connection = yield* makeZCodeRpcConnection({
@@ -128,23 +134,56 @@ export const discoverZCodeCatalog = (
         }
       }
     }).pipe(Effect.ignore, Effect.forkScoped);
-    const created = yield* connection.request("session/create", {
-      workspace: { workspacePath: cwd, workspaceKey: cwd },
-      mode: "build",
-      persistence: "deferred",
-    });
-    const sessionId = recordString(recordField(created, "session"), "sessionId");
-    if (sessionId === undefined) return parseZCodeCatalog(undefined);
-    const subscribed = yield* connection.request("session/subscribe", {
-      sessionId,
-      deliveryKind: "desktop-continuous",
-      includeSnapshot: true,
-    });
-    yield* connection.request("session/close", { sessionId }).pipe(Effect.ignore);
-    return parseZCodeCatalog(
-      recordField(recordField(recordField(subscribed, "snapshot"), "settings"), "model"),
-    );
+    return yield* probeZCodeCatalog(connection.request, cwd, candidates);
   }).pipe(Effect.scoped, Effect.timeout(CATALOG_PROBE_TIMEOUT_MS));
+
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+export interface ZCodePersonalConfig {
+  /** Merged config file every zcode process of the instance uses, if any. */
+  readonly path: string | null;
+  readonly models: ReadonlyArray<ZCodeCatalogModel>;
+}
+
+/**
+ * Merges every personal provider config on this machine into `targetPath`
+ * (mode 0600) so all of the user's providers exist in one zcode registry.
+ * Unreadable or invalid files are skipped; any failure leaves zcode on its
+ * own config resolution and never breaks the instance.
+ */
+export const materializeZCodePersonalConfig = (
+  environment: NodeJS.ProcessEnv,
+  home: string,
+  targetPath: string,
+): Effect.Effect<ZCodePersonalConfig, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const documents: Array<unknown> = [];
+    for (const candidate of zcodePersonalConfigCandidates(environment, home, path.join)) {
+      if (candidate === targetPath) continue;
+      const text = yield* fileSystem
+        .readFileString(candidate)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      if (text === undefined) continue;
+      const document = decodeJson(text);
+      if (Option.isSome(document)) documents.push(document.value);
+    }
+    const merged = mergeZCodePersonalConfigs(documents);
+    if (merged === null) return { path: null, models: [] };
+    yield* fileSystem.makeDirectory(path.dirname(targetPath), { recursive: true, mode: 0o700 });
+    yield* fileSystem.writeFileString(targetPath, encodeJson(merged), { mode: 0o600 });
+    // writeFile keeps an existing file's mode.
+    yield* fileSystem.chmod(targetPath, 0o600);
+    return { path: targetPath, models: zcodeConfigModels(merged) };
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("ZCode personal provider config merge failed.", {
+        errorTag: causeErrorTag(cause),
+      }).pipe(Effect.as({ path: null, models: [] })),
+    ),
+  );
 
 const runZCodeVersionCommand = (settings: ZCodeSettings, environment: NodeJS.ProcessEnv) =>
   Effect.gen(function* () {
@@ -161,6 +200,7 @@ const runZCodeVersionCommand = (settings: ZCodeSettings, environment: NodeJS.Pro
 
 export function buildInitialZCodeProviderSnapshot(
   settings: ZCodeSettings,
+  catalog: ZCodeCatalog | null = null,
 ): Effect.Effect<ServerProviderDraft> {
   return Effect.gen(function* () {
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
@@ -168,7 +208,7 @@ export function buildInitialZCodeProviderSnapshot(
       presentation: ZCODE_PRESENTATION,
       enabled: settings.enabled,
       checkedAt,
-      models: zcodeModelsFromSettings(settings.customModels, null),
+      models: zcodeModelsFromSettings(settings.customModels, catalog),
       probe: {
         installed: settings.enabled,
         version: null,

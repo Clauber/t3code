@@ -15,6 +15,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -33,7 +34,13 @@ import {
   type ProviderAdapterV2Event,
   type ProviderAdapterV2SessionRuntime,
 } from "../ProviderAdapter.ts";
-import { makeZCodeAdapterV2, zcodePermissionOptionResponse } from "./ZCodeAdapterV2.ts";
+import { zcodeConfigModels } from "../../provider/ZCodeModels.ts";
+import type { ZCodeCatalogProbeResult } from "./ZCodeCatalogProbe.ts";
+import {
+  makeZCodeAdapterV2,
+  zcodePermissionOptionResponse,
+  type ZCodeAdapterV2Options,
+} from "./ZCodeAdapterV2.ts";
 
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-zcode-v2-adapter-",
@@ -60,6 +67,21 @@ const selection = (model: string, options?: ModelSelection["options"]): ModelSel
   model,
   ...(options === undefined ? {} : { options }),
 });
+
+const CONFIG_WITH_GHOST = {
+  config: {
+    providerOrder: ["ghost"],
+    providerConfigRules: {
+      providerRules: [
+        {
+          providerId: "ghost",
+          providerName: "Ghost",
+          config: { modelOrder: ["kiro/claude-opus-5", "gone"], personalModelIds: ["plain"] },
+        },
+      ],
+    },
+  },
+};
 
 const ALLOW_ONCE = { decision: "allow", reason: "Approved once" };
 const ALLOW_PROJECT = {
@@ -103,6 +125,8 @@ const makeFakeZCode = Effect.gen(function* () {
   let stdinBuffer = "";
   let refuseResume = false;
   let holdSend = false;
+  /** slug → "missing", or the only reasoning level zcode accepts for it. */
+  const modelRules = new Map<string, string>();
   let seq = 1;
 
   const write = (record: Rec) =>
@@ -151,6 +175,19 @@ const makeFakeZCode = Effect.gen(function* () {
       case "session/send":
         if (holdSend) return null;
         return { id, result: { accepted: true, inputId: "in-1" } };
+      case "session/setModel": {
+        const params = record["params"] as Rec;
+        const model = params["model"] as Rec;
+        const level = (model["options"] as Rec | undefined)?.["reasoningLevel"];
+        const rule = modelRules.get(`${String(model["providerId"])}/${String(model["modelId"])}`);
+        if (rule === "missing") {
+          return { id, error: { code: -32603, message: `Provider Registry 中不存在 Model` } };
+        }
+        if (rule !== undefined && level !== rule) {
+          return { id, error: { code: -32603, message: "Reasoning level is required" } };
+        }
+        return { id, result: {} };
+      }
       default:
         return { id, result: {} };
     }
@@ -218,6 +255,9 @@ const makeFakeZCode = Effect.gen(function* () {
     takeCall,
     takeAnswer,
     allCalls: () => allCalls,
+    setModelRule: (slug: string, rule: string) => {
+      modelRules.set(slug, rule);
+    },
     holdSends: () => {
       holdSend = true;
     },
@@ -228,7 +268,11 @@ const makeFakeZCode = Effect.gen(function* () {
 });
 type FakeZCode = Effect.Success<typeof makeFakeZCode>;
 
-const openRuntime = Effect.fnUntraced(function* (fake: FakeZCode, model = "default") {
+const openRuntime = Effect.fnUntraced(function* (
+  fake: FakeZCode,
+  model = "default",
+  extra: Pick<ZCodeAdapterV2Options, "knownModels" | "modelValidation"> = {},
+) {
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const adapter = makeZCodeAdapterV2({
@@ -238,6 +282,7 @@ const openRuntime = Effect.fnUntraced(function* (fake: FakeZCode, model = "defau
     spawner: fake.spawner,
     idAllocator,
     serverConfig,
+    ...extra,
   });
   const runtime = yield* adapter.openSession({
     threadId: THREAD_ID,
@@ -764,6 +809,68 @@ describe("ZCodeAdapterV2", () => {
       const cancelled = yield* takeEvent(isRequest);
       assert.equal(cancelled.runtimeRequest.status, "cancelled");
       yield* fake.takeCall("session/stop");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("validates config models with the reasoning-level ladder", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeZCode;
+      fake.setModelRule("ghost/kiro/claude-opus-5", "low");
+      fake.setModelRule("ghost/gone", "missing");
+      const candidates = zcodeConfigModels(CONFIG_WITH_GHOST);
+      const result = yield* Deferred.make<ZCodeCatalogProbeResult>();
+      let claims = 0;
+      const { runtime } = yield* openRuntime(fake, "default", {
+        modelValidation: {
+          claim: () => claims++ === 0,
+          candidates: () => candidates,
+          onResult: (probe) => Deferred.succeed(result, probe).pipe(Effect.asVoid),
+        },
+      });
+      yield* ensureThread(runtime);
+      const probe = yield* Deferred.await(result);
+      assert.deepEqual(Object.fromEntries(probe.validation), {
+        "ghost/kiro/claude-opus-5": { accepted: true, reasoningLevel: "low" },
+        "ghost/gone": { accepted: false },
+        "ghost/plain": { accepted: true, reasoningLevel: null },
+      });
+      const deferred = fake
+        .allCalls()
+        .find(
+          (call) =>
+            call["method"] === "session/create" &&
+            (call["params"] as Rec)["persistence"] === "deferred",
+        );
+      assert.isDefined(deferred);
+      const ladder = fake
+        .allCalls()
+        .filter((call) => call["method"] === "session/setModel")
+        .map((call) => call["params"] as Rec);
+      // none, high, low for the slashed model; one try for the others.
+      assert.equal(ladder.length, 5);
+      assert.isTrue(ladder.every((params) => params["persistAsWorkspaceLastUsed"] === false));
+      assert.deepEqual(ladder[0]?.["model"], {
+        providerId: "ghost",
+        modelId: "kiro/claude-opus-5",
+      });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("finds an accepted reasoning level when a picked config model needs one", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeZCode;
+      fake.setModelRule("ghost/kiro/claude-opus-5", "high");
+      const { runtime } = yield* openRuntime(fake, "default", {
+        knownModels: () => zcodeConfigModels(CONFIG_WITH_GHOST),
+      });
+      const providerThread = yield* ensureThread(runtime);
+      yield* startTurn(runtime, providerThread, { model: selection("ghost/kiro/claude-opus-5") });
+      yield* fake.takeCall("session/send");
+      const levels = fake
+        .allCalls()
+        .filter((call) => call["method"] === "session/setModel")
+        .map((call) => ((call["params"] as Rec)["model"] as Rec)["options"]);
+      assert.deepEqual(levels, [undefined, undefined, { reasoningLevel: "high" }]);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 });
