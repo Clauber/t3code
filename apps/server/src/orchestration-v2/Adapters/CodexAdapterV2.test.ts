@@ -1957,6 +1957,23 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
   );
 
+  it.effect("ends the session event stream when the app-server exits", () =>
+    Effect.gen(function* () {
+      const preamble = codexReplayPreamble({
+        nativeThreadId: "exit-thread",
+        nativeTurnId: "unused",
+        prompt: "unused",
+      });
+      const transcript = makeCodexReplayTranscript({
+        scenario: "app-server-exit",
+        entries: [...preamble.slice(0, 5), { type: "runtime_exit", status: "success" }],
+      });
+      const harness = yield* makeCodexReplayHarness(transcript);
+      // The session manager evicts a session only when its event stream ends.
+      yield* harness.runtime.events.pipe(Stream.runDrain);
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
+
   it.effect("keeps the app-server failure as the cause when an unload is rejected", () =>
     Effect.gen(function* () {
       const nativeThreadId = "unload-thread-rejected";

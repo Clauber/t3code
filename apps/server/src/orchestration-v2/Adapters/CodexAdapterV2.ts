@@ -65,6 +65,7 @@ import type {
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -1710,7 +1711,14 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           model: input.modelSelection.model,
           now,
         });
-        const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+        const events = yield* Queue.unbounded<ProviderAdapterV2Event, Cause.Done>();
+        // The event stream is the session manager's only liveness signal. End it
+        // when the app-server exits, or the dead session stays cached and every
+        // later turn on this instance fails to start.
+        yield* client.raw.awaitTermination.pipe(
+          Effect.andThen(Queue.end(events)),
+          Effect.forkIn(scope),
+        );
         const rateLimitSnapshot = yield* Ref.make<CodexRateLimitSnapshot | undefined>(undefined);
         const limitedTurnItems = yield* Ref.make(
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
