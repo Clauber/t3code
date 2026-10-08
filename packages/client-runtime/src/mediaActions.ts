@@ -5,4 +5,6 @@ export type MediaActionId =
   | "copy-url"
   | "open-file"
   | "save"
-  | "copy-image";
+  | "copy-image"
+  /** Client-surface only: offered when the media source carries an `onHide` callback. */
+  | "hide-image";

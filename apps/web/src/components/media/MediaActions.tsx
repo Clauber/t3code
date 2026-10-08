@@ -24,6 +24,8 @@ export interface MediaActionSource {
   readonly reference?: MediaReference;
   readonly asset?: { readonly environmentId: EnvironmentId; readonly resource: AssetResource };
   readonly onOpenFile?: () => void;
+  /** Offered as "Hide image": the caller owns what hiding means for this surface. */
+  readonly onHide?: () => void;
 }
 
 function mediaFileName(source: MediaActionSource): string {
@@ -113,6 +115,8 @@ export function MediaActions({
           label: "Copy image",
           disabled: unavailable || !canCopyImage,
         });
+        // The chip replacing the image is the confirmation; no toast on top.
+        if (source.onHide) items.push({ id: "hide-image", label: "Hide image" });
       }
 
       const action = await api.contextMenu.show(items, position);
@@ -134,6 +138,8 @@ export function MediaActions({
         });
       } else if (action === "open-file") {
         source.onOpenFile?.();
+      } else if (action === "hide-image") {
+        source.onHide?.();
       } else if (action === "save" || action === "copy-image") {
         progressToast = toastManager.add({
           type: "loading",
