@@ -155,6 +155,30 @@ it("the chip's Show control reveals the image without following a surrounding li
   }
 });
 
+it("hides a workspace screenshot by its path", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  mint.mockResolvedValue(
+    AsyncResult.success({ relativeUrl: "/api/assets/dash.png", expiresAt: 1 }),
+  );
+  const imagePath = "/repo/.t3/screenshots/dash.png";
+  const key = chatImageHideKey(mediaEnvironmentId, imagePath);
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    renderer = await renderChatMarkdown(`![Dashboard](${imagePath})`);
+    expect(renderer.root.findAllByProps({ "data-hidden-chat-image": "" })).toHaveLength(0);
+
+    await act(async () => {
+      useHiddenChatImagesStore.getState().hideChatImage(key);
+    });
+    expect(renderer.root.findAllByProps({ "data-hidden-chat-image": "" })).toHaveLength(1);
+    expect(renderer.root.findAllByType("img")).toHaveLength(0);
+  } finally {
+    await act(async () => renderer?.unmount());
+    useHiddenChatImagesStore.getState().showChatImage(key);
+    vi.unstubAllGlobals();
+  }
+});
+
 it("opens host media through server authorization before the client grant loads", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   mint.mockResolvedValue(

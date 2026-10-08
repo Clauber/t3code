@@ -1,4 +1,9 @@
-import { EnvironmentId, type AuthSessionState } from "@t3tools/contracts";
+import {
+  AuthFilesystemReadScope,
+  EnvironmentId,
+  ThreadId,
+  type AuthSessionState,
+} from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { createElement, isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -69,13 +74,30 @@ vi.mock("../ui/toast", () => ({
   },
 }));
 
-import { MediaActions, type MediaActionSource } from "./MediaActions";
+import { MediaActions, useMediaActions, type MediaActionSource } from "./MediaActions";
 
 const environmentId = EnvironmentId.make("media-environment");
+const otherEnvironmentId = EnvironmentId.make("other-environment");
+const threadId = ThreadId.make("media-thread");
+const granted: Pick<AuthSessionState, "authenticated" | "scopes"> = {
+  authenticated: true,
+  scopes: [AuthFilesystemReadScope],
+};
 const denied: Pick<AuthSessionState, "authenticated" | "scopes"> = {
   authenticated: true,
   scopes: [],
 };
+
+function hostSource(_tag: "workspace-file" | "media-file" = "media-file"): MediaActionSource {
+  return {
+    kind: "image",
+    name: "image.png",
+    src: null,
+    asset: { environmentId, resource: { _tag, threadId, path: "/repo/image.png" } },
+    reference: { kind: "file", path: "/repo/image.png", relativePath: "image.png" },
+    onOpenFile: state.openFile,
+  };
+}
 
 function openMenu(source: MediaActionSource) {
   const find = (node: ReactNode): ((event: unknown) => void) | undefined => {
@@ -119,6 +141,33 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
+it.each(["workspace-file", "media-file"] as const)(
+  "waits for the %s grant before enabling host menu actions",
+  (_tag) => {
+    for (const [session, disabled] of [
+      [null, true],
+      [granted, false],
+      [denied, true],
+    ] as const) {
+      if (session === null) state.sessions.delete(environmentId);
+      else state.sessions.set(environmentId, session);
+      openMenu(hostSource(_tag));
+
+      const items = state.showMenu.mock.lastCall![0];
+      expect(items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "save", disabled }),
+          expect.objectContaining({ id: "copy-image", disabled }),
+          expect.objectContaining({ id: "open-file", disabled }),
+        ]),
+      );
+      expect(items).toContainEqual({ id: "copy-full-path", label: "Copy full path" });
+    }
+    expect(state.mint).not.toHaveBeenCalled();
+    expect(state.download).not.toHaveBeenCalled();
+  },
+);
+
 it("keeps nonhost menu actions available with pending or denied host grants", () => {
   const sources: MediaActionSource[] = [
     { kind: "image", name: "image.png", src: "https://cdn.test/image.png" },
@@ -144,6 +193,118 @@ it("keeps nonhost menu actions available with pending or denied host grants", ()
     }
   }
 });
+
+it.each(["workspace-file", "media-file"] as const)(
+  "disables denied %s byte actions and prevents imperative requests",
+  async (_tag) => {
+    const source = hostSource(_tag);
+    openMenu(source);
+    expect(state.showMenu).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "save", disabled: true }),
+        expect.objectContaining({ id: "copy-image", disabled: true }),
+        expect.objectContaining({ id: "open-file", disabled: true }),
+      ]),
+      { x: 1, y: 1 },
+    );
+    await expect(useMediaActions(source).save()).rejects.toThrow("cannot read host files");
+    await expect(useMediaActions(source).copyImage()).rejects.toThrow("cannot read host files");
+    expect(state.mint).not.toHaveBeenCalled();
+    expect(state.download).not.toHaveBeenCalled();
+    expect(state.clipboard).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["save", "copy-image", "open-file"])(
+  "rechecks access when %s is selected from an already open native menu",
+  async (action) => {
+    state.sessions.set(environmentId, granted);
+    const choice = deferred<string>();
+    const completed = deferred<void>();
+    state.showMenu.mockReturnValue(choice.promise);
+    state.menuFinished = () => completed.resolve();
+    state.openFile.mockImplementation(() => completed.resolve());
+    openMenu(hostSource());
+
+    state.sessions.set(environmentId, denied);
+    choice.resolve(action);
+    await completed.promise;
+
+    expect(state.mint).not.toHaveBeenCalled();
+    expect(state.download).not.toHaveBeenCalled();
+    expect(state.clipboard).not.toHaveBeenCalled();
+    expect(state.openFile).not.toHaveBeenCalled();
+  },
+);
+
+it("reenables the menu and a retained action when file access is gained", async () => {
+  const actions = useMediaActions(hostSource());
+  state.sessions.set(environmentId, granted);
+  openMenu(hostSource());
+
+  await actions.save();
+
+  expect(state.download).toHaveBeenCalledOnce();
+  expect(state.showMenu).toHaveBeenCalledWith(
+    expect.arrayContaining([expect.objectContaining({ id: "save", disabled: false })]),
+    expect.anything(),
+  );
+});
+
+it.each([false, true])("uses the media environment's grant (allowed: %s)", async (allowed) => {
+  state.sessions.set(environmentId, allowed ? granted : denied);
+  state.sessions.set(otherEnvironmentId, allowed ? denied : granted);
+
+  await useMediaActions(hostSource())
+    .save()
+    .catch(() => {});
+
+  expect(state.mint).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  expect(state.download).toHaveBeenCalledTimes(allowed ? 1 : 0);
+});
+
+it("stops before downloading if access is revoked while minting the URL", async () => {
+  state.sessions.set(environmentId, granted);
+  state.mint.mockImplementation(async () => {
+    state.sessions.set(environmentId, denied);
+    return AsyncResult.success({ relativeUrl: "/api/assets/image.png", expiresAt: 1 });
+  });
+
+  await expect(useMediaActions(hostSource()).save()).rejects.toThrow("cannot read host files");
+
+  expect(state.download).not.toHaveBeenCalled();
+});
+
+it("lets the server authorize an explicit action before the grant resolves", async () => {
+  state.sessions.delete(environmentId);
+
+  await useMediaActions(hostSource()).save();
+
+  expect(state.mint).toHaveBeenCalledOnce();
+  expect(state.download).toHaveBeenCalledOnce();
+});
+
+it("saves uploaded attachments without filesystem access", async () => {
+  await useMediaActions({
+    kind: "image",
+    name: "image.png",
+    src: null,
+    asset: { environmentId, resource: { _tag: "attachment", attachmentId: "upload" } },
+  }).save();
+
+  expect(state.mint).toHaveBeenCalledOnce();
+  expect(state.download).toHaveBeenCalledOnce();
+});
+
+it.each(["https://cdn.test/image.png", "blob:local-image"])(
+  "saves direct media without a host grant: %s",
+  async (src) => {
+    await useMediaActions({ kind: "image", name: "image.png", src }).save();
+
+    expect(state.mint).not.toHaveBeenCalled();
+    expect(state.download).toHaveBeenCalledWith(src, "image.png");
+  },
+);
 
 it("offers hide image only when the source can hide it", () => {
   openMenu({ kind: "image", name: "image.png", src: "https://cdn.test/image.png" });
