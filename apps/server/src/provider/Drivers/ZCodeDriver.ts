@@ -36,7 +36,7 @@ import {
   checkZCodeProviderStatus,
   discoverZCodeCatalog,
   materializeZCodePersonalConfig,
-} from "../Layers/ZCodeProvider.ts";
+} from "../ZCodeProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -50,7 +50,7 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
-import type { ServerProviderShape } from "../Services/ServerProvider.ts";
+import type { ServerProviderShape } from "../ServerProvider.ts";
 import {
   combineZCodeCatalog,
   type ZCodeCatalog,

@@ -7,6 +7,7 @@ import {
   GrokSettings,
   OpenCodeSettings,
   PiSettings,
+  MuseSettings,
   ProviderDriverKind,
   ZCodeSettings,
 } from "@t3tools/contracts";
@@ -86,6 +87,12 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     value: ProviderDriverKind.make("antigravity"),
     label: "Antigravity",
     settingsSchema: AntigravitySettings,
+  },
+  {
+    value: ProviderDriverKind.make("muse"),
+    label: "Muse Code",
+    settingsSchema: MuseSettings,
+    badgeLabel: "Beta",
   },
   {
     value: ProviderDriverKind.make("pi"),

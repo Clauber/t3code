@@ -100,11 +100,11 @@ import {
 
 const DEFAULT_GROK_SETTINGS = Schema.decodeSync(GrokSettings)({});
 
-const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
+const layerServerConfig = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-acp-v2-adapter-",
 }).pipe(Layer.provide(NodeServices.layer));
 
-const testLayer = Layer.mergeAll(NodeServices.layer, IdAllocator.layer, serverConfigLayer);
+const layerTest = Layer.mergeAll(NodeServices.layer, IdAllocator.layer, layerServerConfig);
 const ACP_TEST_DRIVER = ProviderDriverKind.make("acp-test");
 const decodeUnknownJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
@@ -692,7 +692,7 @@ describe("AcpAdapterV2", () => {
           assert.equal(retries.at(-1)?.status, "completed");
           assert.equal(retries.at(-1)?.title, "Provider recovered");
         }
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it("preserves legacy ids and scopes v2 ids by provider instance", () => {
@@ -777,7 +777,7 @@ describe("AcpAdapterV2", () => {
       assert.deepEqual(mcpServer.args, ["acp-mcp-bridge"]);
       assert.equal(runtimeInput?.processEnvironment?.T3_ACP_MCP_NODE, process.execPath);
       assert.equal(runtimeInput?.processEnvironment?.T3_ACP_MCP_ENTRYPOINT, undefined);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("refreshes ACP prompt instructions when the interaction mode changes", () =>
@@ -904,7 +904,7 @@ describe("AcpAdapterV2", () => {
         "session/set_config_option",
         "Build should restore the native mode that T3 temporarily replaced for Plan",
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("starts a new replay message after ACP v2 plan boundaries", () =>
@@ -995,7 +995,185 @@ describe("AcpAdapterV2", () => {
         snapshot.messages.map((message) => message.text),
         ["before plan", "after plan"],
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("persists a bounded subset of streamed root and child tool updates", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
+      let handler: Parameters<Runtime["handleSessionUpdate"]>[0] | undefined;
+      // Devin streams a file write as it generates it: each update resends the
+      // whole file so far, a few characters longer, with no status.
+      const file = `${"x = 1\n".repeat(800)}END_OF_FILE\n`;
+      const chunks = 200;
+      const streamedWrite = (
+        toolCallId: string,
+        parentAgentId?: string,
+      ): Array<EffectAcpSchema.SessionUpdate> => {
+        const meta =
+          parentAgentId === undefined ? {} : { "cognition.ai/subagent_context": { parentAgentId } };
+        const write = (text: string, status?: "completed") => ({
+          sessionUpdate: "tool_call_update" as const,
+          toolCallId,
+          title: "Writing ./audit.py",
+          ...(status === undefined ? {} : { status }),
+          content: [
+            { type: "diff" as const, path: "/repo/audit.py", oldText: null, newText: text },
+          ],
+          rawInput: { file_path: "/repo/audit.py", content: text },
+          _meta: meta,
+        });
+        return [
+          {
+            sessionUpdate: "tool_call",
+            toolCallId,
+            title: "Writing …",
+            kind: "edit",
+            status: "pending",
+            _meta: meta,
+          },
+          ...Array.from({ length: chunks }, (_, index) =>
+            write(file.slice(0, Math.ceil((file.length * (index + 1)) / chunks))),
+          ),
+          write(file, "completed"),
+        ];
+      };
+      const instanceId = ProviderInstanceId.make("devin-streamed-write");
+      const adapter = makeAcpAdapterV2({
+        instanceId,
+        crypto: yield* Crypto.Crypto,
+        fileSystem: yield* FileSystem.FileSystem,
+        idAllocator: yield* IdAllocator.IdAllocatorV2,
+        serverConfig: yield* ServerConfig.ServerConfig,
+        selfInvocation: yield* resolveSelfInvocation(),
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          normalizeSessionUpdate: normalizeDevinSessionUpdate,
+          normalizeToolCall: normalizeDevinToolCall,
+          extractSubagentUpdate: extractDevinSubagentUpdate,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            wrapRuntime: (runtime) => ({
+              ...runtime,
+              handleSessionUpdate: (next) =>
+                Effect.sync(() => {
+                  handler = next;
+                }).pipe(Effect.andThen(runtime.handleSessionUpdate(next))),
+              prompt: () =>
+                Effect.gen(function* () {
+                  const updates = [
+                    {
+                      sessionUpdate: "tool_call_update",
+                      toolCallId: "child-a",
+                      status: "in_progress",
+                      _meta: {
+                        "cognition.ai/subagent_started": {
+                          agentId: "child-a",
+                          title: "Write audit script",
+                          task: "Write audit.py.",
+                        },
+                      },
+                    },
+                    ...streamedWrite("root-write"),
+                    ...streamedWrite("child-write", "child-a"),
+                    // Same-length output replacements are still live output.
+                    ...Array.from({ length: 5 }, (_, index) => ({
+                      sessionUpdate: "tool_call_update" as const,
+                      toolCallId: "ticker",
+                      title: "Watch ticks",
+                      kind: "execute" as const,
+                      status: "in_progress" as const,
+                      rawOutput: `tick ${index + 1}`,
+                    })),
+                    ...Array.from({ length: 5 }, (_, index) => ({
+                      sessionUpdate: "tool_call_update" as const,
+                      toolCallId: "text-ticker",
+                      title: "Watch ticks",
+                      kind: "execute" as const,
+                      status: "in_progress" as const,
+                      rawOutput: { type: "Text", text: `tock ${index + 1}` },
+                    })),
+                    {
+                      sessionUpdate: "tool_call_update",
+                      toolCallId: "child-a",
+                      status: "completed",
+                      _meta: {
+                        "cognition.ai/subagent_completed": {
+                          agentId: "child-a",
+                          success: true,
+                          summary: "Wrote audit.py",
+                        },
+                      },
+                    },
+                  ] satisfies Array<EffectAcpSchema.SessionUpdate>;
+                  for (const update of updates)
+                    yield* handler!({ sessionId: "mock-session-1", update });
+                  return { stopReason: "end_turn" as const };
+                }),
+            }),
+          }),
+        },
+      });
+      const threadId = ThreadId.make("devin-streamed-write");
+      const modelSelection = { instanceId, model: "default" };
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("devin-streamed-write-session"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+        }),
+      );
+      const items = Array.from(
+        yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        ),
+      ).flatMap((event) => (event.type === "turn_item.updated" ? [event.turnItem] : []));
+      for (const toolCallId of ["root-write", "child-write"]) {
+        const writes = items.filter((item) => item.nativeItemRef?.nativeId?.endsWith(toolCallId));
+        assert.isAtLeast(writes.length, chunks / 10, toolCallId);
+        assert.isAtMost(writes.length, chunks / 5, toolCallId);
+        assert.equal(writes.at(-1)?.status, "completed", toolCallId);
+        assert.include(JSON.stringify(writes.at(-1)), "END_OF_FILE", toolCallId);
+      }
+      for (const [toolCallId, word] of [
+        ["ticker", "tick"],
+        ["text-ticker", "tock"],
+      ] as const) {
+        const ticks = items.filter((item) => item.nativeItemRef?.nativeId?.endsWith(toolCallId));
+        for (let tick = 1; tick <= 5; tick++) {
+          assert.isTrue(
+            ticks.some((item) => JSON.stringify(item).includes(`${word} ${tick}`)),
+            `${word} ${tick} must persist`,
+          );
+        }
+      }
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("keeps Devin parent paragraphs intact while projecting native child work", () =>
@@ -1049,6 +1227,19 @@ describe("AcpAdapterV2", () => {
                   // Production thread 54aeb6d7 split after "(command". Metadata shapes
                   // below were captured from live Devin sessions showy-mile/fragrant-chamomile.
                   const updates = [
+                    {
+                      sessionUpdate: "tool_call_update",
+                      toolCallId: "child-a",
+                      status: "in_progress",
+                      _meta: {
+                        "cognition.ai/subagent_started": {
+                          agentId: "child-a",
+                          title: "Map orchestration",
+                          task: "Run pwd, then reply ONE.",
+                          model: " \t ",
+                        },
+                      },
+                    },
                     {
                       sessionUpdate: "tool_call_update",
                       toolCallId: "child-a",
@@ -1235,6 +1426,18 @@ describe("AcpAdapterV2", () => {
         event.type === "subagent.updated" ? [event.subagent] : [],
       );
       const task = tasks.at(-1);
+      assert.isNull(tasks[0]?.model);
+      const childThread = events.find(
+        (event) =>
+          event.type === "app_thread.created" && event.appThread.id === task?.childThreadId,
+      );
+      assert.equal(
+        childThread?.type === "app_thread.created"
+          ? childThread.appThread.modelSelection.model
+          : undefined,
+        modelSelection.model,
+      );
+      assert.equal(task?.model, "SWE-1.7 Medium");
       assert.equal(task?.status, "completed");
       assert.equal(task?.result, "Final report: ONE");
       const childMessages = new Map(
@@ -1303,7 +1506,7 @@ describe("AcpAdapterV2", () => {
       );
       assert.equal(parentTools.length, 2);
       assert.equal(parentTools[0]?.title, "Parent tool finished");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("projects ACP v2 fidelity updates into first-class orchestration items", () =>
@@ -1495,7 +1698,7 @@ describe("AcpAdapterV2", () => {
         afterOmittedPatch.messages.some((message) => message.text === "late authoritative text"),
         "omitted late message content must preserve the authoritative text",
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live(
@@ -1582,7 +1785,7 @@ describe("AcpAdapterV2", () => {
             nativeTurnId: "persisted-session:turn:1",
           }),
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("preserves new-session fallback when an eager ACP session load is stale", () =>
@@ -1689,7 +1892,7 @@ describe("AcpAdapterV2", () => {
           ),
         }),
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("cleans detached fixtures when an assertion aborts the test scope", () =>
@@ -1728,7 +1931,7 @@ describe("AcpAdapterV2", () => {
         Option.isSome(yield* waitForProcessesToExit(published)),
         "detached cleanup finalizer must reap the Bash and sleep fixture",
       );
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.live("replaces an unexpectedly terminated ACP runtime before the next turn", () =>
@@ -1810,7 +2013,7 @@ describe("AcpAdapterV2", () => {
       );
       assert.equal(runtimeOrdinalSeen, 2);
       assert.lengthOf(runtimeInputs, 2);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("reaps detached native work when the provider exits before explicit teardown", () =>
@@ -1895,7 +2098,7 @@ describe("AcpAdapterV2", () => {
         Option.isSome(yield* waitForProcessesToExit(pids)),
         "provider termination must reap the detached launcher, Bash, and sleep processes",
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("surfaces reduced guarantee when delegated cgroup containment is unavailable", () =>
@@ -1952,7 +2155,7 @@ describe("AcpAdapterV2", () => {
       });
       yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
       assert.equal(containment, "process-ledger-reduced-guarantee");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("cleans a cgroup lease when the pre-exec join wrapper fails", () =>
@@ -2030,7 +2233,7 @@ describe("AcpAdapterV2", () => {
       assert.equal(createCalls, 1);
       assert.isAtLeast(killCalls, 1);
       assert.isAtLeast(removeCalls, 1);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("negotiates and executes optional native session forks through the ACP runtime", () =>
@@ -2240,7 +2443,7 @@ describe("AcpAdapterV2", () => {
         { requestId: "test-terminal-output", method: "terminal/output" },
       );
       assert.equal(terminalOutput.output, "Bearer target-thread-token");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -2339,7 +2542,7 @@ describe("AcpAdapterV2", () => {
           { method: "fs/read_text_file", errorCode: -32601 },
         ]);
         assert.isFalse(yield* fileSystem.exists(probePath));
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("does not turn an unknown permission approval into an execute grant", () =>
@@ -2476,7 +2679,7 @@ describe("AcpAdapterV2", () => {
         providerTurnId: pending.runtimeRequest.providerTurnId,
       });
       yield* Fiber.join(turnFiber);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("fails missing native ACP session ids through the typed start-turn error channel", () =>
@@ -2538,7 +2741,7 @@ describe("AcpAdapterV2", () => {
       assert.equal(error._tag, "ProviderAdapterTurnStartError");
       assert.instanceOf(error.cause, ProviderAdapterProtocolError);
       assert.include(String(error.cause), "missing its ACP session id");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("replaces the ACP session and clears conversation state on rollback", () =>
@@ -2705,7 +2908,7 @@ describe("AcpAdapterV2", () => {
         }
       }
       assert.equal(secondStatus, "completed");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("quarantines callbacks from a failed rollback replacement before retrying", () =>
@@ -2866,7 +3069,7 @@ describe("AcpAdapterV2", () => {
         status: "running",
       });
       assert.isFalse(yield* hasPendingBackgroundWork);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("keeps the original ACP session usable when a staged replacement terminates", () =>
@@ -2982,7 +3185,7 @@ describe("AcpAdapterV2", () => {
           break;
         }
       }
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("closes an idle ACP session exactly once through the transition permit", () =>
@@ -3031,7 +3234,7 @@ describe("AcpAdapterV2", () => {
       yield* Scope.close(sessionScope, Exit.void);
       const finalizerMethods = yield* pollProtocolMethods(protocolEvents);
       assert.equal(finalizerMethods.filter((method) => method === "session/close").length, 1);
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect.each(["grok-build", "composer-2"])(
@@ -3088,7 +3291,7 @@ describe("AcpAdapterV2", () => {
           ).length,
           model === "grok-build" ? 0 : 1,
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("Grok reapplies an explicit return to the session's setup-time model", () =>
@@ -3169,7 +3372,7 @@ describe("AcpAdapterV2", () => {
         ).length,
         3,
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("skips requested options that the active ACP session does not expose", () =>
@@ -3218,7 +3421,7 @@ describe("AcpAdapterV2", () => {
       });
 
       assert.equal(runtime.providerSession.status, "ready");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("reconfigures a loaded ACP session from its own active setup metadata", () =>
@@ -3329,7 +3532,7 @@ describe("AcpAdapterV2", () => {
           rawProtocolRequestParam(event, "configId") === "model",
       );
       assert.lengthOf(modelConfigurationRequests, 2);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("terminalizes an empty successful foreground Bash tool when the turn completes", () =>
@@ -3476,7 +3679,7 @@ describe("AcpAdapterV2", () => {
         Stream.runHead,
       );
       assert.isTrue(Option.isSome(loadAfterRestart));
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("drains native ACP cancellation before admitting the next prompt", () =>
@@ -3590,7 +3793,7 @@ describe("AcpAdapterV2", () => {
         ),
       );
       assert.equal(nextTerminal.type === "turn.terminal" && nextTerminal.status, "completed");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("cancels pending permission requests while interrupting an ACP turn", () =>
@@ -3691,7 +3894,7 @@ describe("AcpAdapterV2", () => {
         ),
       );
       assert.equal(terminal.type, "turn.terminal");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("keeps hard teardown excluded until a permission response is enqueued", () =>
@@ -3790,7 +3993,7 @@ describe("AcpAdapterV2", () => {
       yield* Deferred.succeed(releaseResponseAcknowledgement, undefined);
       yield* Fiber.join(responseFiber);
       yield* Fiber.join(interruptFiber);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("carries elicitation request identity through the completed stdout write", () =>
@@ -3879,7 +4082,7 @@ describe("AcpAdapterV2", () => {
       assert.isUndefined(responseFiber.pollUnsafe());
       yield* Deferred.succeed(releaseResponseAcknowledgement, undefined);
       yield* Fiber.join(responseFiber);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("auto-approves tagged MCP elicitations under full-access policy", () =>
@@ -3947,7 +4150,7 @@ describe("AcpAdapterV2", () => {
 
       assert.isFalse(events.some((event) => event.type === "runtime_request.updated"));
       assert.isTrue(events.some((event) => event.type === "turn.terminal"));
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("fails a held native response acknowledgement before normal session close", () =>
@@ -4055,7 +4258,7 @@ describe("AcpAdapterV2", () => {
       assert.include(responseLifecycle, "failed");
       yield* Deferred.succeed(releaseResponseAcknowledgement, undefined);
       yield* Fiber.join(closeFiber);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("rejects delayed native response registration when normal close wins the permit", () =>
@@ -4169,7 +4372,7 @@ describe("AcpAdapterV2", () => {
       assert.equal(responseLifecycle.filter((event) => event === "admission_rejected").length, 1);
       yield* Deferred.succeed(releaseTransportClose, undefined);
       yield* Fiber.join(closeFiber);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("bounds a missing pending permission response acknowledgement", () =>
@@ -4310,7 +4513,7 @@ describe("AcpAdapterV2", () => {
       assert.include(responseLifecycle, "late_noop");
       yield* Scope.close(sessionScope, Exit.void);
       assert.notInclude(yield* pollProtocolMethods(protocolEvents), "session/close");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("defers caller cancellation until a pending response acknowledgement is bounded", () =>
@@ -4426,7 +4629,7 @@ describe("AcpAdapterV2", () => {
       yield* Fiber.join(cancellationFiber);
       yield* Fiber.join(interruptFiber);
       assert.isTrue(yield* Deferred.isDone(releaseNativeHook));
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("waits for immediate allow and deny permission responses before hard teardown", () =>
@@ -4531,7 +4734,7 @@ describe("AcpAdapterV2", () => {
           yield* Fiber.interrupt(turnFiber).pipe(Effect.forkDetach);
         }).pipe(Effect.scoped);
       }
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("waits for immediate URL elicitation responses before hard teardown", () =>
@@ -4624,7 +4827,7 @@ describe("AcpAdapterV2", () => {
       yield* Deferred.succeed(releaseResponseAcknowledgement, undefined);
       yield* Fiber.join(interruptFiber);
       yield* Fiber.interrupt(turnFiber).pipe(Effect.forkDetach);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("bounds a missing immediate response acknowledgement before hard teardown", () =>
@@ -4717,7 +4920,7 @@ describe("AcpAdapterV2", () => {
       });
       assert.isAtLeast((yield* Clock.currentTimeMillis) - startedAt, 1_500);
       yield* Fiber.interrupt(turnFiber).pipe(Effect.forkDetach);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("rejects an elicitation response when hard teardown wins admission", () =>
@@ -4830,7 +5033,7 @@ describe("AcpAdapterV2", () => {
         assert.fail("teardown winning admission must reject the elicitation response");
       }
       assert.include(Cause.pretty(responseExit.cause), "No pending ACP runtime request");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("releases an ACP turn when cancellation times out", () =>
@@ -4933,7 +5136,7 @@ describe("AcpAdapterV2", () => {
         ),
         Stream.runHead,
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("treats a second hard Stop as success when the turn is already gone", () =>
@@ -5031,7 +5234,7 @@ describe("AcpAdapterV2", () => {
         }
       }
       assert.equal(terminal, "interrupted");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("finalizes a settled turn held open for background work when interrupted", () =>
@@ -5125,7 +5328,7 @@ describe("AcpAdapterV2", () => {
         }
       }
       assert.equal(terminalStatus, "interrupted");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -5273,7 +5476,7 @@ describe("AcpAdapterV2", () => {
         }
         assert.equal(carriedItemStatus, "completed");
         assert.equal(secondTerminalStatus, "completed");
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -5422,7 +5625,7 @@ describe("AcpAdapterV2", () => {
           yield* hasPendingBackgroundWork,
           "hasPendingBackgroundWork must clear after carryover subagent terminals",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("handles a child terminal after carryover rehydrate", () =>
@@ -5657,7 +5860,7 @@ describe("AcpAdapterV2", () => {
 
       yield* Deferred.succeed(releaseSecondPromptCompletion, undefined);
       yield* Fiber.join(secondTurnFiber);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -5880,7 +6083,7 @@ describe("AcpAdapterV2", () => {
             "finalize-window terminal must clear the carryover pin",
           );
         }).pipe(Effect.provideService(Clock.Clock, blockingClock));
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -6101,7 +6304,7 @@ describe("AcpAdapterV2", () => {
         assert.equal(attachTerminal, "completed");
         assert.equal(completedAfterAttach, 1);
         assert.isFalse(yield* hasPendingBackgroundWork);
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("finishes a settled root's carryover subagent from its structured end", () =>
@@ -6249,7 +6452,7 @@ describe("AcpAdapterV2", () => {
         yield* hasPendingBackgroundWork,
         "a finished carryover subagent stops pinning",
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("projects completed-root carryover eagerly and drain cannot resurrect it", () =>
@@ -6499,7 +6702,7 @@ describe("AcpAdapterV2", () => {
         "buffered spawn ACK must not create a continuation-owned turn item",
       );
       assert.isFalse(yield* hasPendingBackgroundWork);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -6787,7 +6990,7 @@ describe("AcpAdapterV2", () => {
           "queued continuation must drain the wake content after the user run",
         );
         assert.isFalse(yield* hasPendingBackgroundWork);
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -7030,7 +7233,7 @@ describe("AcpAdapterV2", () => {
         }
         assert.equal(completedSubagentTurnItems, 1);
         assert.isFalse(yield* hasPendingBackgroundWork);
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("projects an interrupted root-session end notice at the next attach", () =>
@@ -7257,7 +7460,7 @@ describe("AcpAdapterV2", () => {
       }
       assert.equal(completedSubagentTurnItems, 1);
       assert.isFalse(yield* hasPendingBackgroundWork);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -7528,7 +7731,7 @@ describe("AcpAdapterV2", () => {
           yield* hasPendingBackgroundWork,
           "pin must clear after the continuation drains, not when the child session completed",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -7770,7 +7973,7 @@ describe("AcpAdapterV2", () => {
           yield* hasPendingBackgroundWork,
           "hasPendingBackgroundWork must end false after the continuation drains",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -7948,7 +8151,7 @@ describe("AcpAdapterV2", () => {
           1,
           "settled soft steer must not respawn the ACP runtime process",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("preserveRuntimeOnSettledInterrupt does not soften a mid-prompt steering interrupt", () =>
@@ -8036,7 +8239,7 @@ describe("AcpAdapterV2", () => {
         assert.fail("mid-prompt steering interrupt must still take the hard teardown path");
       }
       assert.include(Cause.pretty(interruptExit.cause), "session is poisoned");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live(
@@ -8232,7 +8435,7 @@ describe("AcpAdapterV2", () => {
           0,
           "a cancel-backgrounded task completion must not wake a synthetic continuation run",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("direct Stop quarantine drops late background task mutations from the stopped run", () =>
@@ -8379,7 +8582,7 @@ describe("AcpAdapterV2", () => {
         yield* hasPendingBackgroundWork,
         "direct Stop quarantine must drop residual background task mutations from the stopped run",
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("production Grok interrupt flags still hard-kill and respawn on user Stop", () =>
@@ -8505,7 +8708,7 @@ describe("AcpAdapterV2", () => {
         2,
         "user Stop with production Grok flags must replace the ACP runtime process",
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   // it.live: ownDetachedProcessGroup teardown uses wall-clock sleeps; under
@@ -8814,7 +9017,7 @@ describe("AcpAdapterV2", () => {
           "Stop quarantine must drop turn-1 subagent carryover on the respawned runtime",
         );
         assert.equal(secondTerminalStatus, "completed");
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("Direct Stop projects an interrupt-deferred terminal exactly once", () =>
@@ -9009,7 +9212,7 @@ describe("AcpAdapterV2", () => {
       }
       assert.equal(completedAfterStop, 1);
       assert.isFalse(yield* hasPendingBackgroundWork);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -9179,7 +9382,7 @@ describe("AcpAdapterV2", () => {
         }
         assert.equal(firstTerminalStatus, "interrupted");
         assert.equal(subagentPhase, "spawn");
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -9310,7 +9513,7 @@ describe("AcpAdapterV2", () => {
           yield* hasPendingBackgroundWork,
           "wake buffer must not stay non-empty and pin idle release after an already-handled re-report",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -9432,7 +9635,7 @@ describe("AcpAdapterV2", () => {
         yield* first.clearIfCurrent!();
         yield* lateTool("new-result-after-worker-drop");
         assert.lengthOf(continuationRequests, 2);
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("keeps a buffered continuation current when a user turn starts before dispatch", () =>
@@ -9639,7 +9842,7 @@ describe("AcpAdapterV2", () => {
       assert.equal(continuationTerminalStatus, "completed");
       assert.isTrue(bufferedTextSeen, "continuation must drain the wake buffer after the user run");
       assert.isFalse(yield* hasPendingBackgroundWork);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -9805,7 +10008,7 @@ describe("AcpAdapterV2", () => {
           reportSeen,
           "the injected-turn report must project before the turn finalizes",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -10007,7 +10210,7 @@ describe("AcpAdapterV2", () => {
           0,
           "settle-without-report with mid-hold ext completion must not open a wake after the report streams",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -10247,7 +10450,7 @@ describe("AcpAdapterV2", () => {
           0,
           "pre-settle arm must be cleared when the injected report streams; no duplicate wake",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -10466,7 +10669,7 @@ describe("AcpAdapterV2", () => {
           1,
           "exactly one continuation when the last running task ends post-finalize with kept midTurn marks",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -10681,7 +10884,7 @@ describe("AcpAdapterV2", () => {
           0,
           "interrupted turns must clear midTurn marks; B ending post-finalize must not offer",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -11055,7 +11258,7 @@ describe("AcpAdapterV2", () => {
           yield* hasPendingBackgroundWork,
           "wake buffer must not retain turn-1 or turn-2 in-turn-handled ack residue",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("a wake names work that ended while the previous wake was queued", () =>
@@ -11209,7 +11412,7 @@ describe("AcpAdapterV2", () => {
         outcome: "completed",
         summary: 'Command "sleep b" finished',
       });
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("mid-turn completed mutation defers offer until finalize only when unhandled", () =>
@@ -11538,7 +11741,7 @@ describe("AcpAdapterV2", () => {
         0,
         "post-finalize must not offer when the mid-turn completion was handled in-turn",
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -11727,7 +11930,7 @@ describe("AcpAdapterV2", () => {
           beforeWhitespace.messages,
           "whitespace-only late chunks must not mutate the loaded history snapshot",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("empty-drain continuation turn waits the quiet window so late frames can attach", () =>
@@ -11971,7 +12174,7 @@ describe("AcpAdapterV2", () => {
         }
       }
       assert.equal(continuationTerminal, "completed");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("empty-drain continuation turn finalizes after the quiet window with no frames", () =>
@@ -12161,7 +12364,7 @@ describe("AcpAdapterV2", () => {
         }
       }
       assert.equal(continuationTerminal, "completed");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("restarts the ACP child process before the next prompt after interrupt", () =>
@@ -12258,7 +12461,7 @@ describe("AcpAdapterV2", () => {
         Option.isSome(loadAfterRestart),
         "post-interrupt startTurn should respawn the runtime and replay session/resume",
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("Windows teardown is one-shot explicitly with independent finalizer cleanup", () =>
@@ -12304,7 +12507,7 @@ describe("AcpAdapterV2", () => {
       assert.equal(taskkillCommands.length, 1);
       yield* Scope.close(runtimeScope, Exit.void);
       assert.equal(taskkillCommands.length, 1);
-    }).pipe(Effect.provide(testLayer)),
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it("accepts only taskkill exit code zero as successful tree termination", () => {
@@ -12407,7 +12610,7 @@ describe("AcpAdapterV2", () => {
       );
       const error = yield* Effect.flip(runtime.terminateProcessGroup!);
       assert.equal(error.detail, "mock taskkill failure");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("poisons the session when hard teardown defects and blocks replacement work", () =>
@@ -12625,7 +12828,7 @@ describe("AcpAdapterV2", () => {
       assert.isFalse(processExists(commandSleepPid!));
       const finalizerMethods = yield* pollProtocolMethods(protocolEvents);
       assert.notInclude(finalizerMethods, "session/close");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("durably poisons start and resume when required hard teardown is unavailable", () =>
@@ -12714,7 +12917,7 @@ describe("AcpAdapterV2", () => {
         .pipe(Effect.exit);
       if (Exit.isSuccess(resumeExit)) assert.fail("poisoned session must reject resumeThread");
       assert.include(Cause.pretty(resumeExit.cause), "session is poisoned");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("holds concurrent startTurn behind successful hard teardown and reloads once", () =>
@@ -12827,7 +13030,7 @@ describe("AcpAdapterV2", () => {
           Stream.runHead,
         );
       }
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("quarantines old-runtime callbacks after successful hard teardown", () =>
@@ -13189,7 +13392,7 @@ describe("AcpAdapterV2", () => {
         }),
         requestRuntimeRestart: true,
       });
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("keeps stale deferred cleanup inert while replacement requests remain live", () =>
@@ -13314,7 +13517,7 @@ describe("AcpAdapterV2", () => {
         }
         replacementTerminal = event.type === "turn.terminal";
       }
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("resolves owner cancellation and concurrent resume waiters after hard teardown", () =>
@@ -13447,7 +13650,7 @@ describe("AcpAdapterV2", () => {
       const methodsAfterRestart = yield* pollProtocolMethods(protocolEvents);
       assert.equal(methodsAfterRestart.filter((method) => method === "session/resume").length, 2);
       assert.equal(methodsAfterRestart.filter((method) => method === "session/fork").length, 1);
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("direct Stop skips uninterruptible ACP cancel and recovers after native teardown", () =>
@@ -13723,7 +13926,7 @@ describe("AcpAdapterV2", () => {
         stoppedRunTextOnFollowUp,
         "stopped-run residual text must not attach to the follow-up run",
       );
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect(
@@ -13878,7 +14081,7 @@ describe("AcpAdapterV2", () => {
           carriedCompleted,
           "Direct Stop must not carry a stopped subagent into the follow-up run",
         );
-      }).pipe(Effect.provide(testLayer), Effect.scoped),
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("restart_active terminates native work and reloads a clean runtime", () =>
@@ -14064,7 +14267,7 @@ describe("AcpAdapterV2", () => {
       }
       assert.equal(secondTerminal, "completed");
       assert.isFalse(staleEventSeen, "interrupted runtime events must not attach to attempt 2");
-    }).pipe(Effect.provide(testLayer), Effect.scoped),
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 });
 

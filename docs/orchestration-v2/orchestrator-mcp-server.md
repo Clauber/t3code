@@ -9,7 +9,7 @@ agent can use this endpoint to:
 - wait for or poll the sub-agent's durable result;
 - cancel an active delegated task; and
 - create one or more ordinary top-level T3 threads;
-- list and incrementally read project threads;
+- list a project's threads and incrementally read any thread;
 - rename threads, regenerate titles, and link or unlink pull requests;
 - send or steer follow-up messages; and
 - wait for or interrupt ordinary thread runs.
@@ -20,7 +20,7 @@ only the supplied task prompt, plus an optional role instruction supplied in
 the same tool call. Parent conversation history is not copied into the child.
 
 `ThreadManagementService` is the shared server application boundary for V2
-WebSocket commands and MCP. It owns project-scoped lookup, listing, send-mode
+WebSocket commands and MCP. It owns thread lookup, listing, send-mode
 selection, durable send postconditions, wait polling, and interrupt selection;
 `OrchestratorV2` remains the lower-level command/event processor. Transport
 adapters only authenticate, resolve transport-specific inputs, and shape
@@ -54,10 +54,11 @@ The MCP HTTP server resolves the bearer token and supplies the resulting
 `McpInvocationScope` to tool handlers. Orchestration handlers additionally
 check the `orchestration` capability before reading or mutating state.
 
-A token the registry does not know falls back to an environment bearer session
-(`t3 auth session issue`) with `orchestration:operate`. That makes a headless
-client caller with no thread of its own, so another harness on the machine can
-launch and steer T3 threads. Browser cookie and DPoP sessions never pass this
+A token that is neither a registry token nor an MCP OAuth client session falls
+back to an environment bearer session (`t3 auth session issue`) with
+`orchestration:operate`, admitted as a full-access client caller with no thread
+of its own, so a headless harness that cannot sign in through OAuth can launch
+and steer T3 threads. Browser cookie and DPoP sessions never pass this
 fallback; MCP must not be reachable through ambient browser credentials.
 
 ## Provider Injection
@@ -331,21 +332,22 @@ this binding.
 Pass the task in `message`. Project, model, and modes inherit when omitted;
 workspace does not. `scratch: true` launches without a project, in a folder of
 its own under the environment's Scratch project. For stacked PRs, use the parent branch as `baseRef` with
-`startFromOrigin: false`. Launch requires a full-access/default caller and has
-no retry key, so inspect existing threads after a failed or lost response before
+`startFromOrigin: false`. The new thread may not run with broader runtime or
+interaction modes than the caller. Launch has no retry key, so inspect existing threads after a failed or lost response before
 launching again. `create_threads` remains the batch option for a shared checkout.
 
 ### `t3_thread_list`
 
-Lists durable thread shells in the calling thread's project, newest first.
-Callers can filter by title, run status, and whether app-owned sub-agent threads
-are included. Results are bounded and offset-paginated. Deleted threads and
-threads from other projects are never exposed.
+Lists durable thread shells in one project, newest first: `projectId` when
+given, else the calling thread's project. Callers can filter by title, run
+status, and whether app-owned sub-agent threads are included. Results are
+bounded and offset-paginated. Deleted threads are never listed.
 
 ### `t3_thread_read`
 
-Reads a project-scoped thread's durable state, recent runs, and visible
-timeline. The default `messages` view returns user messages, assistant
+Reads the durable state, recent runs, and visible timeline of any thread in
+the environment by thread ID. A deleted thread returns `thread_not_found`. The
+default `messages` view returns user messages, assistant
 messages, and proposed plans. The `activity` view also returns summarized tool,
 reasoning, checkpoint, handoff, and runtime-request items. Large item text is
 bounded and reports whether it was truncated. `afterPosition` and
@@ -357,9 +359,19 @@ and `creationSource: "mcp"`; provider output uses `creationSource: "provider"`.
 Actor and ingress are separate so agent-authored user-role messages remain
 distinguishable from human-authored messages.
 
+Agents mention another thread as `[title](t3-thread://v1/<threadId>)`. The
+link carries only the id, which resolves in the environment of the message that
+holds it. Clients show the thread's current title rather than the label, so a
+rename never leaves a stale link.
+
+List and read results report `snoozed` and `snoozedUntil`, and
+`t3_thread_list` filters on `snoozed`. The server's `isSnoozed` follows the
+client's `effectiveSnoozed`, so agents and the sidebar agree: a snoozed thread
+wakes early when it has a pending request, fails, or completes after the snooze.
+
 ### `t3_thread_update`
 
-Updates metadata for the calling thread or another thread in the same project.
+Updates metadata for the calling thread or any other thread in the environment.
 The typed actions are `rename`, `regenerate_title`, `link_pull_request`, and
 `unlink_pull_request`. A link input supplies the repository, number, and URL;
 the server records the target thread's project ID. Branch and workspace changes
@@ -373,7 +385,7 @@ detail also exposes an in-flight title regeneration.
 
 ### `t3_thread_send`
 
-Sends a message to an ordinary or delegated thread in the calling project:
+Sends a message to any ordinary or delegated thread in the environment:
 
 - `auto` starts an idle thread, steers a fully active turn, or queues behind a
   turn that is not yet steerable;
@@ -440,9 +452,11 @@ results use the latest assistant content from the final work turn.
   mode. It may not escalate privileges.
 - A child interaction mode may stay equal to or narrow from `default` to
   `plan`. It may not escalate from `plan` to `default`.
-- General thread management is limited to the calling thread's project. Send
-  additionally enforces the same runtime and interaction privilege ceiling as
-  child creation.
+- Thread tools take any thread in the environment as a target. For a thread
+  caller, list and search cover one project: its own unless `projectId` is given.
+- A tool that changes another thread needs the calling thread's live run, and
+  the target's runtime and interaction modes may not be broader than the
+  caller's. This is the same privilege ceiling as child creation.
 - Provider instances must be enabled, installed, available, authenticated, and
   backed by a V2 adapter.
 - A requested model must be advertised by the selected provider when the
@@ -503,7 +517,7 @@ Coverage includes:
 - async status polling;
 - cancellation;
 - batch ordinary-thread creation;
-- project-scoped thread listing and timeline reads;
+- thread listing and timeline reads, including another project's threads;
 - ordinary-thread send, wait, steering, and interruption;
 - inheritance and per-thread provider overrides; and
 - idempotent retries.
