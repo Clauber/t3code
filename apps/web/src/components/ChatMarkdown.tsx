@@ -7,6 +7,7 @@ import {
 import {
   ChevronRightIcon,
   CodeIcon,
+  EyeOffIcon,
   FileSpreadsheetIcon,
   FileTextIcon,
   GlobeIcon,
@@ -87,6 +88,7 @@ import remarkBreaks from "remark-breaks";
 import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { parseComposerContextHref } from "@t3tools/shared/composerContextReferences";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import { chatImageHideKey, useHiddenChatImagesStore } from "./chat/hiddenChatImages";
 import remarkGfm from "remark-gfm";
 import type { Processor } from "unified";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
@@ -1580,6 +1582,44 @@ function ChatMarkdownImageFallback(props: {
   );
 }
 
+/**
+ * Placeholder for an image the user hid. The message text still carries the
+ * image's markdown (`data-markdown-copy`), so copying the message still copies
+ * it — hiding is a view change, not an edit to what the agent said. Showing
+ * removes the persisted hide, so the picture returns here and in every other
+ * embed of the same source.
+ */
+function HiddenChatImageChip(props: {
+  readonly copyMarkdown: string | undefined;
+  readonly onShow: () => void;
+}) {
+  return (
+    <span
+      data-markdown-copy={props.copyMarkdown}
+      data-hidden-chat-image=""
+      className={cn(
+        CHAT_MARKDOWN_MEDIA_LAYOUT_CLASS_NAME,
+        "inline-flex items-center gap-1.5 rounded-md border border-border/40 bg-muted/40 px-2 py-1 text-xs text-muted-foreground",
+      )}
+    >
+      <EyeOffIcon aria-hidden className="size-3.5 shrink-0" />
+      Image hidden
+      <button
+        type="button"
+        className="shrink-0 rounded-sm font-medium text-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline focus-visible:outline-ring"
+        onClick={(event) => {
+          // An image inside a markdown link would otherwise navigate on show.
+          event.preventDefault();
+          event.stopPropagation();
+          props.onShow();
+        }}
+      >
+        Show
+      </button>
+    </span>
+  );
+}
+
 const CHAT_MARKDOWN_IMAGE_FRAME_CLASS_NAME = cn(
   "aspect-video w-full overflow-hidden bg-muted/60",
   CHAT_MARKDOWN_MEDIA_MAX_WIDTH_CLASS_NAME,
@@ -1787,6 +1827,8 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
   readonly fallbackSrc?: string | undefined;
   readonly workspaceRoot?: string | undefined;
   readonly onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  /** Offered as "Hide image" in the media menu; hiding is the caller's store. */
+  readonly onHideImage?: (() => void) | undefined;
 }) {
   const assetUrl = useAssetUrlState(props.environmentId, props.resource);
   const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, props.resource);
@@ -1841,6 +1883,7 @@ export const ChatMarkdownAssetImage = memo(function ChatMarkdownAssetImage(props
               ),
         }
       : {}),
+    ...(props.onHideImage ? { onHide: props.onHideImage } : {}),
   };
 
   if (props.kind === "video") {
@@ -3286,6 +3329,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
       renderContextReference,
     } = use(ChatMarkdownRendererContext);
     const imageExpand = use(MarkdownLinkContext) ? undefined : expandMedia;
+    // Subscribed before any early return: hooks cannot sit behind one.
+    const hiddenImageKeys = useHiddenChatImagesStore((state) => state.hiddenKeys);
+    const hideChatImage = useHiddenChatImagesStore((state) => state.hideChatImage);
     const contextReference = typeof src === "string" ? parseComposerContextHref(src) : null;
     if (contextReference) {
       const label = alt || contextReference.contextId;
@@ -3311,6 +3357,27 @@ const CHAT_MARKDOWN_COMPONENTS = {
     const imageSource = classifyMarkdownImageSource(classifiedSrc, imageBaseDir ?? cwd);
     const kind = mediaKindFromPath(classifiedSrc) ?? "image";
     const directUri = imageSource._tag === "Direct" ? imageSource.uri : null;
+    // Hidden by identity, not by message: agents re-embed the same screenshot
+    // path across turns, and a hide must outlive every one of them. Videos and
+    // images that cannot resolve (no fallback to hide) keep rendering as today.
+    const hideImageSource =
+      kind === "image"
+        ? (directUri ??
+          (imageSource._tag === "WorkspaceFile" && threadRef ? imageSource.path : null))
+        : null;
+    const hideKey =
+      hideImageSource === null
+        ? null
+        : chatImageHideKey(threadRef?.environmentId ?? environmentId ?? null, hideImageSource);
+    const onHideImage = hideKey === null ? undefined : () => hideChatImage(hideKey);
+    if (hideKey !== null && hiddenImageKeys.has(hideKey)) {
+      return (
+        <HiddenChatImageChip
+          copyMarkdown={copyMarkdown}
+          onShow={() => useHiddenChatImagesStore.getState().showChatImage(hideKey)}
+        />
+      );
+    }
     const githubMediaUrl =
       directUri === null ? null : githubMediaFetchUrl(resolveProtocolRelativeMediaUrl(directUri));
     if (
@@ -3340,6 +3407,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
           // authored one: a `blob` link addresses the page, and only the raw host has the bytes.
           fallbackSrc={githubMediaUrl}
           onImageExpand={imageExpand}
+          onHideImage={onHideImage}
         />
       );
     }
@@ -3353,6 +3421,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
         name: altText || kind,
         src: mediaSrc,
         ...(reference ? { reference } : {}),
+        ...(onHideImage ? { onHide: onHideImage } : {}),
       };
       if (kind === "video") {
         return (
@@ -3399,6 +3468,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
           style={authoredSizeStyle}
           workspaceRoot={cwd}
           onImageExpand={imageExpand}
+          onHideImage={onHideImage}
         />
       );
     }
