@@ -202,6 +202,32 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
 
+  it.effect("resolves partial clones with filter annotations on fetch remotes", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-partial-clone-",
+      });
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, [
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/FeltRight/FeltRightStudioV2.git",
+      ]);
+      yield* git(cwd, ["config", "remote.origin.promisor", "true"]);
+      yield* git(cwd, ["config", "remote.origin.partialclonefilter", "blob:none"]);
+
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const identity = yield* resolver.resolve(cwd);
+      expect(identity?.canonicalKey).toBe("github.com/feltright/feltrightstudiov2");
+      expect(identity?.locator.remoteName).toBe("origin");
+      expect(identity?.locator.remoteUrl).toBe(
+        "https://github.com/FeltRight/FeltRightStudioV2.git",
+      );
+    }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+  );
+
   it.effect("returns the git top-level root path when resolving from a nested workspace", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
