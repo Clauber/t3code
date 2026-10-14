@@ -132,8 +132,10 @@ const ZCodeProviderCapabilitiesV2 = {
     emitsTurnStarted: true,
     emitsTurnCompleted: true,
     supportsInterrupt: true,
+    // The stdio protocol rejects `session/send` while a prompt runs, so a
+    // steer stops the turn and resends on the same zcode session.
     supportsActiveSteering: false,
-    supportsSteeringByInterruptRestart: false,
+    supportsSteeringByInterruptRestart: true,
     supportsQueuedMessages: true,
     terminalStatusQuality: "strong",
   },

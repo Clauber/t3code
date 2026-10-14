@@ -25,9 +25,10 @@ project-wide "always allow" rule.
 
 ## Limits
 
-ZCode threads cannot roll back or fork their conversation, and a message sent while ZCode is
-working waits for the current turn to finish. ZCode instances do not generate commit messages,
-pull request text, or thread titles.
+ZCode threads cannot roll back or fork their conversation. A message queued while ZCode is
+working waits for the current turn to finish; a steer stops the current turn and sends the message
+as a new turn in the same conversation. ZCode instances do not generate commit messages, pull
+request text, or thread titles.
 
 ## Troubleshooting
 

@@ -314,6 +314,7 @@ const startTurn = Effect.fnUntraced(function* (
     readonly model?: ModelSelection;
     readonly runtimeMode?: RuntimeMode;
     readonly runOrdinal?: number;
+    readonly text?: string;
   } = {},
 ) {
   const now = yield* DateTime.now;
@@ -354,7 +355,7 @@ const startTurn = Effect.fnUntraced(function* (
     providerThread,
     message: {
       messageId: `message:${THREAD_ID}:${runOrdinal}` as never,
-      text: "Hello zcode",
+      text: options.text ?? "Hello zcode",
       attachments: [],
       createdBy: "user",
       creationSource: "web",
@@ -620,6 +621,66 @@ describe("ZCodeAdapterV2", () => {
       yield* fake.event("turn.completed", { response: "", resultType: "cancelled" });
       const terminal = yield* takeEvent(isTerminal);
       assert.equal(terminal.status, "interrupted");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("steers by stopping the turn and resending on the same session", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeZCode;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const capabilities = runtime.providerSession.capabilities;
+      assert.isFalse(capabilities.turns.supportsActiveSteering);
+      assert.isTrue(capabilities.turns.supportsSteeringByInterruptRestart);
+      const providerThread = yield* ensureThread(runtime);
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeCall("session/send");
+      const running = yield* takeEvent(
+        (event): event is Extract<ProviderAdapterV2Event, { type: "provider_turn.updated" }> =>
+          event.type === "provider_turn.updated",
+      );
+      const steerError = yield* Effect.flip(
+        runtime.steerTurn({
+          threadId: THREAD_ID,
+          runId: RunId.make(`run:${THREAD_ID}:1`),
+          providerThread,
+          providerTurnId: running.providerTurn.id,
+          message: {
+            messageId: "message:steer" as never,
+            text: "Actually, stop and do this instead",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        }),
+      );
+      assert.equal(steerError._tag, "ProviderAdapterSteerRunUnsupportedError");
+
+      yield* runtime.interruptTurn({ providerThread, providerTurnId: running.providerTurn.id });
+      yield* fake.takeCall("session/stop");
+      yield* fake.event("turn.completed", { response: "", resultType: "cancelled" });
+      const interrupted = yield* takeEvent(isTerminal);
+      assert.equal(interrupted.status, "interrupted");
+
+      const sessionCalls = fake.allCalls().length;
+      yield* startTurn(runtime, providerThread, {
+        runOrdinal: 2,
+        text: "Actually, stop and do this instead",
+      });
+      const resend = yield* fake.takeCall("session/send");
+      assert.deepEqual(resend["params"], {
+        sessionId: FAKE_SESSION,
+        content: "Actually, stop and do this instead",
+      });
+      const newSessions = fake
+        .allCalls()
+        .slice(sessionCalls)
+        .filter(
+          (call) => call["method"] === "session/create" || call["method"] === "session/resume",
+        );
+      assert.deepEqual(newSessions, []);
+      yield* fake.event("turn.completed", { response: "done", resultType: "success" });
+      const completed = yield* takeEvent(isTerminal);
+      assert.equal(completed.status, "completed");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
