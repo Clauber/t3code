@@ -37,6 +37,7 @@ import {
   type OrchestrationV2ProviderTurnTokenUsage,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
+  type OrchestrationV2UserInputQuestion,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
   type RuntimeMode,
@@ -300,6 +301,8 @@ interface ActiveZCodeTurn {
 
 interface PendingZCodeRequest {
   readonly nativeRequestId: unknown;
+  readonly nativeKey: string;
+  readonly structuredQuestions: boolean;
   readonly method: "permission" | "user_input";
   readonly options: unknown;
   readonly approvalKey: string | null;
@@ -750,7 +753,11 @@ export function makeZCodeAdapterV2(
         readonly approvalKey: string | null;
         readonly item:
           | { readonly type: "approval_request"; readonly prompt: string }
-          | { readonly type: "user_input_request"; readonly question: string };
+          | {
+              readonly type: "user_input_request";
+              readonly question: string;
+              readonly questions?: ReadonlyArray<OrchestrationV2UserInputQuestion>;
+            };
         readonly kind: "command" | "file-change" | "user_input";
         readonly options: ReadonlyArray<{
           readonly label: string;
@@ -770,6 +777,14 @@ export function makeZCodeAdapterV2(
           );
           return;
         }
+        // ZCode reannounces one logical request under new RPC IDs. Any of
+        // those IDs resolves it; keep the original card and response target.
+        if (
+          Array.from(pendingRequests.values()).some(
+            (pending) => pending.nativeKey === input_.nativeKey && pending.method === input_.method,
+          )
+        )
+          return;
         const createdAt = yield* DateTime.now;
         const requestId = yield* idAllocator.allocate.runtimeRequest({
           driver: ZCODE_PROVIDER,
@@ -836,7 +851,7 @@ export function makeZCodeAdapterV2(
             : {
                 ...itemBase,
                 type: "user_input_request",
-                questions: [
+                questions: input_.item.questions ?? [
                   {
                     id: input_.nativeKey,
                     header: input_.title,
@@ -848,6 +863,9 @@ export function makeZCodeAdapterV2(
               };
         pendingRequests.set(String(requestId), {
           nativeRequestId: input_.record["id"],
+          nativeKey: input_.nativeKey,
+          structuredQuestions:
+            input_.item.type === "user_input_request" && input_.item.questions !== undefined,
           method: input_.method,
           options: recordField(input_.record["params"], "options"),
           approvalKey: input_.approvalKey,
@@ -905,6 +923,35 @@ export function makeZCodeAdapterV2(
         const params = record["params"];
         const nativeKey = recordString(params, "requestId") ?? String(record["id"]);
         const prompt = recordString(params, "prompt")?.trim() || "ZCode asks for input";
+        const rawQuestions = recordField(params, "questions");
+        const questions = (Array.isArray(rawQuestions) ? rawQuestions : []).flatMap(
+          (question, index) => {
+            const text = recordString(question, "question")?.trim();
+            if (!text) return [];
+            const rawOptions = recordField(question, "options");
+            const options = (Array.isArray(rawOptions) ? rawOptions : []).flatMap((option) => {
+              const label = recordString(option, "label")?.trim();
+              if (!label) return [];
+              return [
+                {
+                  label,
+                  description: recordString(option, "description")?.trim() || label,
+                  value: recordString(option, "value") ?? label,
+                },
+              ];
+            });
+            return [
+              {
+                id: `answer_${index}`,
+                header: recordString(question, "header")?.trim() || "Question",
+                question: text,
+                options,
+                multiSelect: recordField(question, "multiSelect") === true,
+                allowCustomAnswer: true,
+              },
+            ];
+          },
+        );
         const choices = recordField(params, "choices");
         const options = (Array.isArray(choices) ? choices : [])
           .filter((choice): choice is string => typeof choice === "string" && choice.trim() !== "")
@@ -917,7 +964,11 @@ export function makeZCodeAdapterV2(
           approvalKey: null,
           kind: "user_input",
           options,
-          item: { type: "user_input_request", question: prompt },
+          item: {
+            type: "user_input_request",
+            question: prompt,
+            ...(questions.length > 0 ? { questions } : {}),
+          },
         });
       });
 
@@ -1613,6 +1664,26 @@ function zcodeRequestResponse(
         decision: allowed ? "allow" : "deny",
       }
     );
+  }
+  if (pending.structuredQuestions && pending.turnItem.type === "user_input_request") {
+    if (answers === undefined) return { action: "cancel" };
+    const content = Object.fromEntries(
+      pending.turnItem.questions.flatMap((question) => {
+        const answer = answers[question.id];
+        return (typeof answer === "string" && answer.trim().length > 0) ||
+          (Array.isArray(answer) &&
+            answer.length > 0 &&
+            answer.every((value) => typeof value === "string" && value.trim().length > 0))
+          ? [[question.id, answer]]
+          : [];
+      }),
+    );
+    // AskUserQuestion explicitly supports skipping; ExitPlanMode still requires
+    // its exact approval value, and an empty response cannot authorize it.
+    return {
+      action: "accept",
+      content: Object.keys(content).length > 0 ? content : { answers: {} },
+    };
   }
   const questionId =
     pending.turnItem.type === "user_input_request" ? pending.turnItem.questions[0]?.id : undefined;

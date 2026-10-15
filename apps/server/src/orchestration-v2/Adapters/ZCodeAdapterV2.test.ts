@@ -193,6 +193,7 @@ const makeFakeZCode = Effect.gen(function* () {
     }
   };
 
+  const allAnswers: Rec[] = [];
   const handleChunk = (chunk: Uint8Array) =>
     Effect.gen(function* () {
       stdinBuffer += new TextDecoder().decode(chunk);
@@ -204,6 +205,7 @@ const makeFakeZCode = Effect.gen(function* () {
         if (line.length === 0) continue;
         const record = decodeJsonLine(line) as Rec;
         if (record["method"] === undefined) {
+          allAnswers.push(record);
           yield* Queue.offer(answers, record);
           continue;
         }
@@ -255,6 +257,7 @@ const makeFakeZCode = Effect.gen(function* () {
     takeCall,
     takeAnswer,
     allCalls: () => allCalls,
+    allAnswers: () => allAnswers,
     setModelRule: (slug: string, rule: string) => {
       modelRules.set(slug, rule);
     },
@@ -601,6 +604,159 @@ describe("ZCodeAdapterV2", () => {
         action: "accept",
         content: { value: "beta" },
       });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("preserves structured questions and returns answers by question index", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeZCode;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* ensureThread(runtime);
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeCall("session/send");
+      yield* fake.write({
+        id: "srv-structured",
+        method: "interaction/requestUserInput",
+        params: {
+          requestId: "questions-1",
+          toolName: "AskUserQuestion",
+          prompt: "Tool AskUserQuestion requires user interaction",
+          questions: [
+            {
+              header: "Client",
+              question: "Which client?",
+              options: [{ label: "Menu bar", value: "menu", description: "Opens a viewer" }],
+            },
+            {
+              header: "Network",
+              question: "Which networks?",
+              multiSelect: true,
+              options: [
+                { label: "Tailscale", value: "tail" },
+                { label: "LAN", value: "lan" },
+              ],
+            },
+          ],
+        },
+      });
+      const request = yield* takeEvent(isRequest);
+      const event = yield* takeEvent(
+        (event): event is Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }> =>
+          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+      );
+      assert.equal(event.turnItem.type, "user_input_request");
+      if (event.turnItem.type !== "user_input_request") return;
+      const questions = event.turnItem.questions;
+      assert.equal(questions.length, 2);
+      assert.equal(questions[0]?.question, "Which client?");
+      assert.deepEqual(questions[0]?.options, [
+        { label: "Menu bar", value: "menu", description: "Opens a viewer" },
+      ]);
+      assert.equal(questions[1]?.multiSelect, true);
+      yield* runtime.respondToRuntimeRequest({
+        requestId: request.runtimeRequest.id,
+        answers: { [questions[0]!.id]: "menu", [questions[1]!.id]: ["tail", "lan"] },
+      });
+      assert.deepEqual((yield* fake.takeAnswer("srv-structured"))["result"], {
+        action: "accept",
+        content: { answer_0: "menu", answer_1: ["tail", "lan"] },
+      });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("preserves plan approval values and coalesces reannouncements", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeZCode;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* ensureThread(runtime);
+      yield* startTurn(runtime, providerThread, { runtimeMode: "full-access" });
+      yield* fake.takeCall("session/send");
+      const params = {
+        requestId: "plan-1",
+        toolName: "ExitPlanMode",
+        schema: { interaction: "plan_approval" },
+        input: { plan: "Build the companion." },
+        prompt: "Tool ExitPlanMode requires user interaction",
+        questions: [
+          {
+            header: "Plan",
+            question: "Approve the plan?",
+            options: [{ label: "Approve", value: "approve", description: "Start implementation" }],
+          },
+        ],
+      };
+      yield* fake.write({ id: "srv-plan", method: "interaction/requestUserInput", params });
+      const request = yield* takeEvent(isRequest);
+      const event = yield* takeEvent(
+        (event): event is Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }> =>
+          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+      );
+      if (event.turnItem.type !== "user_input_request") return;
+      assert.equal(event.turnItem.questions[0]?.options[0]?.value, "approve");
+      yield* fake.write({ id: "srv-plan-repeat", method: "interaction/requestUserInput", params });
+      // A later RPC response is a barrier: the reannouncement was handled first.
+      yield* fake.write({ id: "barrier", method: "unknown", params: {} });
+      yield* fake.takeAnswer("barrier");
+      yield* runtime.respondToRuntimeRequest({
+        requestId: request.runtimeRequest.id,
+        answers: { [event.turnItem.questions[0]!.id]: "approve" },
+      });
+      assert.deepEqual((yield* fake.takeAnswer("srv-plan"))["result"], {
+        action: "accept",
+        content: { answer_0: "approve" },
+      });
+      // A duplicate card would remain pending and be cancelled on stop.
+      yield* runtime.interruptTurn({
+        providerThread,
+        providerTurnId: request.runtimeRequest.providerTurnId!,
+      });
+      yield* fake.takeCall("session/stop");
+      yield* fake.write({ id: "after-stop", method: "unknown", params: {} });
+      yield* fake.takeAnswer("after-stop");
+      assert.equal(
+        fake.allAnswers().filter((answer) => answer["id"] === "srv-plan-repeat").length,
+        0,
+      );
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect.each([
+    [
+      "feedback",
+      { answer_0: "Change the network transport" },
+      { action: "accept", content: { answer_0: "Change the network transport" } },
+    ],
+    ["skipped questions", {}, { action: "accept", content: { answers: {} } }],
+    ["blank answer", { answer_0: "  " }, { action: "accept", content: { answers: {} } }],
+    ["empty selection", { answer_0: [] }, { action: "accept", content: { answers: {} } }],
+    ["cancellation", undefined, { action: "cancel" }],
+  ] as const)("returns structured %s without approving a plan", ([, answers, expected]) =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeZCode;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* ensureThread(runtime);
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeCall("session/send");
+      yield* fake.write({
+        id: "srv-response",
+        method: "interaction/requestUserInput",
+        params: {
+          requestId: "response-1",
+          questions: [
+            {
+              header: "Plan",
+              question: "Approve?",
+              options: [{ label: "Approve", value: "approve" }],
+            },
+          ],
+        },
+      });
+      const request = yield* takeEvent(isRequest);
+      yield* runtime.respondToRuntimeRequest({
+        requestId: request.runtimeRequest.id,
+        ...(answers === undefined ? {} : { answers }),
+      });
+      assert.deepEqual((yield* fake.takeAnswer("srv-response"))["result"], expected);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
