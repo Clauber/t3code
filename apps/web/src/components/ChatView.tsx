@@ -260,6 +260,7 @@ import {
   isPreviewSupportedInRuntime,
   setActivePreviewTab,
   useThreadPreviewState,
+  usePreviewTabPresentation,
 } from "../previewStateStore";
 import { BrowserSettingsReadError, openUrlInPreview } from "../browser/openFileInPreview";
 import { resolveDiscoveredServerUrl } from "../browser/browserTargetResolver";
@@ -2317,6 +2318,7 @@ export default function ChatView(props: ChatViewProps) {
     selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
   );
   const activePreviewState = useThreadPreviewState(activeThreadRef);
+  const previewTabPresentation = usePreviewTabPresentation(activeThreadRef);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
   const previewSessionsReady = !activeEnvironmentServerBrowser || activePreviewState.listLoaded;
   const resolvePreviewRuntimeTabId = useMemo(
@@ -11910,8 +11912,8 @@ export default function ChatView(props: ChatViewProps) {
           environmentId={activeThreadRef.environmentId}
           activeSurfaceId={renderedRightPanelSurface?.id ?? null}
           pendingSurfaceIds={pendingFileSurfaceIds}
-          previewSessions={activePreviewState.sessions}
-          desktopByTabId={activePreviewState.desktopByTabId}
+          previewSessions={previewTabPresentation.sessions}
+          desktopByTabId={previewTabPresentation.desktopByTabId}
           previewRuntimeTabId={resolvePreviewRuntimeTabId}
           terminalLabelsById={activeTerminalLabelsById}
           onActivate={activateRightPanelSurface}
@@ -11968,8 +11970,8 @@ export default function ChatView(props: ChatViewProps) {
             environmentId={activeThreadRef.environmentId}
             activeSurfaceId={renderedRightPanelSurface?.id ?? null}
             pendingSurfaceIds={pendingFileSurfaceIds}
-            previewSessions={activePreviewState.sessions}
-            desktopByTabId={activePreviewState.desktopByTabId}
+            previewSessions={previewTabPresentation.sessions}
+            desktopByTabId={previewTabPresentation.desktopByTabId}
             previewRuntimeTabId={resolvePreviewRuntimeTabId}
             terminalLabelsById={activeTerminalLabelsById}
             onActivate={activateRightPanelSurface}

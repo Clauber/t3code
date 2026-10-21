@@ -14,11 +14,13 @@ import {
   type PreviewListResult,
   type PreviewSessionSnapshot,
   type ScopedThreadRef,
+  ThreadId,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 
 import { PREVIEW_RECENT_URL_LIMIT } from "./components/preview/previewConstants";
 import { appAtomRegistry } from "./rpc/atomRegistry";
+import { confirmsManagedOwner } from "./browser/managedOwnerSession";
 
 export interface DesktopPreviewOverlay {
   hasWebContents: boolean;
@@ -166,6 +168,37 @@ const removeSession = (current: ThreadPreviewState, tabId: string): ThreadPrevie
 export function useThreadPreviewState(ref: ScopedThreadRef | null | undefined): ThreadPreviewState {
   const atom = ref ? previewStateAtom(scopedThreadKey(ref)) : emptyPreviewStateAtom;
   return useAtomValue(atom);
+}
+
+export const previewTabPresentationAtom = Atom.family((threadKey: string) =>
+  Atom.make((get) => {
+    const state = get(previewStateAtom(threadKey));
+    const sessions = { ...state.sessions };
+    const desktopByTabId = { ...state.desktopByTabId };
+    for (const [tabId, snapshot] of Object.entries(sessions)) {
+      const attachment = snapshot.managed;
+      if (!attachment?.remote) continue;
+      const ownerState = get(previewStateAtom(scopedThreadKey({
+        environmentId: attachment.ownerEnvironmentId,
+        threadId: ThreadId.make(attachment.hostThreadId),
+      })));
+      const owner = Object.values(ownerState.sessions).find((candidate) =>
+        confirmsManagedOwner(attachment, candidate.managed),
+      );
+      if (!owner) continue;
+      sessions[tabId] = { ...snapshot, navStatus: owner.navStatus };
+      const overlay = ownerState.desktopByTabId[owner.tabId];
+      if (overlay) desktopByTabId[tabId] = overlay;
+      else delete desktopByTabId[tabId];
+    }
+    return { sessions, desktopByTabId };
+  }),
+);
+
+export function usePreviewTabPresentation(ref: ScopedThreadRef | null | undefined) {
+  return useAtomValue(ref
+    ? previewTabPresentationAtom(scopedThreadKey(ref))
+    : emptyPreviewStateAtom);
 }
 
 export function useActivePreviewSessions(): Record<string, ThreadPreviewState> {

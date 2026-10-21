@@ -4,8 +4,10 @@ import {
   type PreviewEvent,
   type PreviewSessionSnapshot,
   ThreadId,
+  PreviewManagedSession,
 } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
+import * as Schema from "effect/Schema";
 
 import {
   __testing,
@@ -15,6 +17,7 @@ import {
   beginPreviewSessionClose,
   cancelPreviewSessionClose,
   previewStateAtom,
+  previewTabPresentationAtom,
   readThreadPreviewState,
   reconcilePreviewServerSessions,
   rememberPreviewUrl,
@@ -58,6 +61,70 @@ const applyPreviewServerEvent = (eventRef: typeof ref, event: PreviewEventDraft)
 beforeEach(() => {
   nextServerRevision = 0;
   resetPreviewStateForTests();
+});
+
+const decodeManagedSession = Schema.decodeSync(PreviewManagedSession);
+
+describe("preview tab presentation", () => {
+  const managed = decodeManagedSession({
+    ownerEnvironmentId: environmentId,
+    instanceId: "instance-default",
+    profileId: "default",
+    incarnation: "boot",
+    engineTabId: "page",
+    hostThreadId: otherRef.threadId,
+    hostTabId: "owner-tab",
+    shared: true,
+    native: true,
+    remote: false,
+  });
+
+  it("follows owner navigation and favicons without changing the chat attachment", () => {
+    const shadow = makeSnapshot({ managed: { ...managed, remote: true } });
+    applyPreviewServerSnapshot(ref, shadow);
+    const atom = previewTabPresentationAtom(scopedThreadKey(ref));
+    const unmount = appAtomRegistry.mount(atom);
+    try {
+      expect(appAtomRegistry.get(atom).sessions.tab_a).toEqual(shadow);
+      const owner = makeSnapshot({
+        threadId: otherRef.threadId,
+        tabId: managed.hostTabId,
+        managed,
+        navStatus: { _tag: "Success", url: "https://example.com/", title: "Example Domain" },
+      });
+      applyPreviewServerSnapshot(otherRef, owner);
+      expect(appAtomRegistry.get(atom).sessions.tab_a).toEqual({
+        ...shadow, navStatus: owner.navStatus,
+      });
+      const nextNav = { _tag: "Success", url: "https://www.wikipedia.org/", title: "Wikipedia" } as const;
+      applyPreviewServerSnapshot(otherRef, { ...owner, navStatus: nextNav });
+      const overlay = {
+        hasWebContents: true, canGoBack: true, canGoForward: false, loading: false,
+        zoomFactor: 1, pictureInPicture: false, colorScheme: "system" as const,
+        audioMuted: false, audible: false, controller: "human" as const,
+        favicon: { pageUrl: nextNav.url, dataUrl: "data:image/png;base64,AAAA", capturedAt: 1 },
+      };
+      applyPreviewDesktopState(otherRef, owner.tabId, overlay);
+      expect(appAtomRegistry.get(atom).sessions.tab_a?.navStatus).toEqual(nextNav);
+      expect(appAtomRegistry.get(atom).desktopByTabId.tab_a?.favicon).toEqual(overlay.favicon);
+      expect(readThreadPreviewState(ref).sessions.tab_a).toEqual(shadow);
+    } finally {
+      unmount();
+    }
+  });
+
+  it("keeps ordinary tabs and rejects a different owner incarnation", () => {
+    const shadow = makeSnapshot({ managed: { ...managed, remote: true } });
+    applyPreviewServerSnapshot(ref, shadow);
+    applyPreviewServerSnapshot(ref, makeSnapshot({ tabId: "standard" }));
+    applyPreviewServerSnapshot(otherRef, makeSnapshot({
+      tabId: managed.hostTabId,
+      managed: decodeManagedSession({ ...managed, incarnation: "another-boot" }),
+      navStatus: { _tag: "Success", url: "https://example.com/", title: "Wrong session" },
+    }));
+    expect(appAtomRegistry.get(previewTabPresentationAtom(scopedThreadKey(ref))).sessions)
+      .toEqual(readThreadPreviewState(ref).sessions);
+  });
 });
 
 describe("previewStateStore (single-tab)", () => {
