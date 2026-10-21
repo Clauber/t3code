@@ -11,6 +11,10 @@ import * as Path from "effect/Path";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
+import {
+  ManagedBrowserDrainDeferredError,
+  OuterUpdateGate,
+} from "../browser/managedBrowserMaintenance.ts";
 import * as ServerConfig from "../config.ts";
 import * as DesktopAppUpdate from "../desktopUpdate/DesktopAppUpdate.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -24,6 +28,8 @@ interface HarnessOptions {
   readonly preflight?: "ready" | "blocked";
   readonly requestUpdate?: ServiceLauncherClient.ServiceLauncherClient["Service"]["requestUpdate"];
   readonly desktopAppUpdate?: DesktopAppUpdate.DesktopAppUpdate["Service"];
+  /** A managed browser's drain gate; absent where this server hosts none. */
+  readonly browserGate?: OuterUpdateGate["Service"];
 }
 
 // The staged runtime is a release archive: the fake client serves SHA256SUMS
@@ -109,7 +115,7 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
   const config = yield* ServerConfig.ServerConfig.pipe(
     Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
   );
-  const selfUpdate = yield* ServerSelfUpdate.make().pipe(
+  const made = ServerSelfUpdate.make().pipe(
     Effect.provideService(ProcessRunner.ProcessRunner, runner),
     Effect.provideService(ServiceLauncherClient.ServiceLauncherClient, launcher),
     Effect.provideService(
@@ -124,6 +130,9 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
     Effect.provideService(HostProcessArchitecture, "x64"),
     Effect.provide(ServerConfig.layer({ ...config, mode: options.mode ?? "web" })),
   );
+  const selfUpdate = yield* options.browserGate === undefined
+    ? made
+    : made.pipe(Effect.provideService(OuterUpdateGate, options.browserGate));
   return { selfUpdate, order };
 });
 
@@ -420,6 +429,105 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       );
       yield* Deferred.succeed(accepted, "launcher-id");
       expect((yield* Fiber.join(first)).updateId).toBe("launcher-id");
+    }),
+  );
+
+  /** A gate that records holds and releases, busy or idle. */
+  const makeGate = (busy: boolean) => {
+    const calls = { holds: 0, releases: 0 };
+    const gate = OuterUpdateGate.of({
+      hold: Effect.suspend(() => {
+        calls.holds += 1;
+        return busy
+          ? Effect.fail(new ManagedBrowserDrainDeferredError({ reasons: ["dialogs"] }))
+          : Effect.succeed({ release: Effect.sync(() => void (calls.releases += 1)) });
+      }),
+    });
+    return { gate, calls };
+  };
+
+  it.effect("refuses to hand off to the launcher while a managed browser is in use", () =>
+    Effect.gen(function* () {
+      const { gate, calls } = makeGate(true);
+      const { selfUpdate, order } = yield* makeHarness({ browserGate: gate });
+      const error = yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip);
+      expect(error.reason).toContain("managed browser is still in use (dialogs)");
+      // Staging may have happened; the launcher was never asked to restart the service.
+      expect(order).not.toContain("accept");
+      expect(calls).toEqual({ holds: 1, releases: 0 });
+      // A refused update leaves the server free to try again.
+      const again = yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip);
+      expect(again.reason).toContain("managed browser is still in use");
+    }),
+  );
+
+  it.effect(
+    "holds the browser through an accepted handoff and releases it only if the handoff fails",
+    () =>
+      Effect.gen(function* () {
+        const accepted = makeGate(false);
+        const ok = yield* makeHarness({ browserGate: accepted.gate });
+        expect((yield* ok.selfUpdate.update({ targetVersion: "1.1.0" })).updateId).toBe(
+          "launcher-id",
+        );
+        // Admission stays closed: the restart ends the process.
+        expect(accepted.calls).toEqual({ holds: 1, releases: 0 });
+
+        const failed = makeGate(false);
+        const bad = yield* makeHarness({
+          browserGate: failed.gate,
+          requestUpdate: () =>
+            Effect.fail(
+              new ServiceLauncherClient.ServiceLauncherRejectedError({
+                targetVersion: "1.1.0",
+                reason: "no",
+              }),
+            ),
+        });
+        yield* bad.selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.flip);
+        expect(failed.calls).toEqual({ holds: 1, releases: 1 });
+      }),
+  );
+
+  it.effect("the desktop commit takes the same gate before the app restarts the server", () =>
+    Effect.gen(function* () {
+      const commits: string[] = [];
+      const desktopAppUpdate = {
+        available: true,
+        run: () => Effect.die("unused"),
+        commit: (requestId: string) =>
+          Effect.sync(() => void commits.push(requestId)).pipe(Effect.andThen(Effect.never)),
+      } as unknown as DesktopAppUpdate.DesktopAppUpdate["Service"];
+      const busy = makeGate(true);
+      const refused = yield* makeHarness({
+        mode: "desktop",
+        desktopAppUpdate,
+        browserGate: busy.gate,
+      });
+      const error = yield* refused.selfUpdate.commitDesktopUpdate("token").pipe(Effect.flip);
+      expect(error.reason).toContain("managed browser is still in use");
+      expect(commits).toEqual([]);
+
+      const idle = makeGate(false);
+      const accepted = yield* makeHarness({
+        mode: "desktop",
+        desktopAppUpdate,
+        browserGate: idle.gate,
+      });
+      const fiber = yield* Effect.forkChild(accepted.selfUpdate.commitDesktopUpdate("token"), {
+        startImmediately: true,
+      });
+      yield* Effect.yieldNow;
+      expect(commits).toEqual(["token"]);
+      expect(idle.calls).toEqual({ holds: 1, releases: 0 });
+      yield* Fiber.interrupt(fiber);
+    }),
+  );
+
+  it.effect("holds nothing where no managed browser is hosted", () =>
+    Effect.gen(function* () {
+      const { selfUpdate } = yield* makeHarness();
+      expect((yield* selfUpdate.update({ targetVersion: "1.1.0" })).updateId).toBe("launcher-id");
     }),
   );
 });

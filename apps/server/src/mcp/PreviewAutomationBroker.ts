@@ -1,3 +1,4 @@
+import { browserAgentSessionId } from "./browserAgentIdentity.ts";
 import {
   PREVIEW_AUTOMATION_V1_OPERATIONS,
   PreviewAutomationClientDisconnectedError,
@@ -175,7 +176,7 @@ const selectorDiagnosticsFromInput = (
 };
 
 const hostAssignmentKey = (scope: McpInvocationContext.McpThreadInvocationScope): string =>
-  `${scope.environmentId}\u0000${scope.thread.providerSessionId}`;
+  browserAgentSessionId(scope.environmentId, scope.thread.providerSessionId);
 
 const isPreviewTabId = Schema.is(PreviewTabId);
 const decodeControlReason = Schema.decodeUnknownOption(PreviewAutomationControlReason);
@@ -638,6 +639,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             tabId: requestContext.tabId,
             tabIdExplicit: input.tabId !== undefined,
             agentSessionId: hostAssignmentKey(input.scope),
+            callerEnvironmentId: input.scope.environmentId,
             operation: input.operation,
             input: input.input,
             timeoutMs,

@@ -62,6 +62,7 @@ export function HostedBrowserWebview(props: {
   readonly zoomFactor: number;
   /** A tab of the desktop's own server; the server drives this webview's page. */
   readonly serverDriven?: boolean;
+  readonly managed?: import("@t3tools/contracts").PreviewManagedSession | undefined;
   /**
    * For a server-driven tab, the appearance and zoom its environment published,
    * which this webview follows so every client and agent sees one state.
@@ -84,8 +85,14 @@ export function HostedBrowserWebview(props: {
     serverRendering,
   } = props;
   const clientSettingsHydrated = useClientSettingsHydrated();
-  const config = usePreviewWebviewConfig(threadRef.environmentId, profileId);
-  const [initialSrc] = useState(() => initialUrl ?? "about:blank");
+  const config = usePreviewWebviewConfig(
+    threadRef.environmentId,
+    profileId,
+    props.managed?.native ? props.managed.profileId : undefined,
+  );
+  const [initialSrc] = useState(() =>
+    props.managed?.native ? "about:blank" : (initialUrl ?? "about:blank"),
+  );
   const tabLeaseRef = useRef<AcquiredDesktopTab | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const webviewRef = useRef<ElectronWebview | null>(null);
@@ -119,7 +126,11 @@ export function HostedBrowserWebview(props: {
     crashRecoveryRef.current = INITIAL_WEBVIEW_CRASH_RECOVERY_STATE;
     const lease = acquireDesktopTab(
       runtimeTabId,
-      serverDriven ? { threadId: threadRef.threadId, tabId } : undefined,
+      props.managed?.native
+        ? { threadId: props.managed.instanceId, tabId: props.managed.engineTabId }
+        : serverDriven
+          ? { threadId: threadRef.threadId, tabId }
+          : undefined,
     );
     tabLeaseRef.current = lease;
     return () => {
@@ -185,7 +196,9 @@ export function HostedBrowserWebview(props: {
       recoveryTimeout = setTimeout(() => {
         recoveryTimeout = null;
         if (!disposed) {
-          setRecoverySrc(latestUrlRef.current ?? initialSrc);
+          setRecoverySrc(
+            props.managed?.native ? "about:blank" : (latestUrlRef.current ?? initialSrc),
+          );
           setWebviewGeneration((generation) => generation + 1);
         }
       }, recovery.delayMs);

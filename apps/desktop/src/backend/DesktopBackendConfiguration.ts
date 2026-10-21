@@ -599,6 +599,18 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         ELECTRON_RUN_AS_NODE: "1",
         // The server names this launcher in commands it asks a person to run.
         T3CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
+        // On a Mac the server this app owns hosts the shared browser as a window on this screen. Set only
+        // here: a server the app merely connects to, or one on another platform, never gets it.
+        ...(environment.platform === "darwin" ? { T3CODE_MANAGED_BROWSER_NATIVE: "1" } : {}),
+        // The verified managed browser baseline ships beside the other native resources, outside the asar.
+        ...(environment.isPackaged
+          ? {
+              T3CODE_STEALTH_BROWSER_COMPONENT_DIR: environment.path.join(
+                environment.resourcesPath,
+                "stealth-browser",
+              ),
+            }
+          : {}),
       },
       // Primary wants process.env (PATH, dev-runner's T3CODE_HOME, etc.).
       extendEnv: true,

@@ -970,6 +970,53 @@ describe("DesktopBackendConfiguration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("hosts the shared browser natively only for the primary server on a Mac", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const nativeFor = (platform: NodeJS.Platform, isPackaged: boolean) =>
+        Effect.gen(function* () {
+          const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-desktop-backend-config-test-",
+          });
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const config = yield* configuration.resolvePrimary;
+          return {
+            native: config.env.T3CODE_MANAGED_BROWSER_NATIVE,
+            component: config.env.T3CODE_STEALTH_BROWSER_COMPONENT_DIR,
+          };
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(layerServerExposure),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(DesktopWslEnvironment.layerTest()),
+              Layer.provideMerge(
+                layerEnvironment("/missing/home", {
+                  platform,
+                  isPackaged,
+                  resourcesPath: "/Applications/T3.app/Contents/Resources",
+                }),
+              ),
+            ),
+          ),
+        );
+      const packagedMac = yield* nativeFor("darwin", true);
+      assert.equal(packagedMac.native, "1");
+      assert.equal(
+        packagedMac.component,
+        "/Applications/T3.app/Contents/Resources/stealth-browser",
+      );
+      // A development run on a Mac hosts natively too; only the packaged baseline is absent.
+      const devMac = yield* nativeFor("darwin", false);
+      assert.equal(devMac.native, "1");
+      assert.isUndefined(devMac.component);
+      for (const platform of ["linux", "win32"] as const) {
+        assert.isUndefined((yield* nativeFor(platform, true)).native);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("resolveWsl carries the kill switch into the distro", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

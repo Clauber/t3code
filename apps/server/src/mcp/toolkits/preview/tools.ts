@@ -17,6 +17,8 @@ import {
   PreviewAutomationScrollInput,
   PreviewAutomationSelectInput,
   PreviewAutomationSelectResult,
+  PreviewAutomationSharedTabs,
+  PreviewAutomationSharedTabsInput,
   PreviewAutomationSetColorSchemeInput,
   PreviewAutomationSetColorSchemeResult,
   PreviewAutomationSnapshot,
@@ -87,6 +89,20 @@ const PreviewOpenTool = browserTool(
     .annotate(Tool.Title, "Open browser preview")
     .annotate(Tool.Destructive, false),
 );
+
+const PreviewSharedTabsTool = Tool.make("preview_shared_tabs", {
+  description:
+    "List the pages in a managed browser that people or other threads shared on purpose, for a browser this thread has a grant on. Each entry's engineTabId and incarnation go into preview_open as joinTab (with the same browserBinding) to attach to it. Pages nobody shared are not listed, and a grant that cannot be used lists nothing.",
+  parameters: PreviewAutomationSharedTabsInput,
+  success: PreviewAutomationSharedTabs,
+  failure: PreviewToolFailure,
+  dependencies,
+})
+  .annotate(Tool.Title, "List shared browser tabs")
+  .annotate(Tool.OpenWorld, true)
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
 
 const PreviewDialogTool = browserTool(
   Tool.make("preview_dialog", {
@@ -314,6 +330,7 @@ const PreviewRecordingStopTool = safeBrowserTool(
 export const PreviewToolkit = Toolkit.make(
   PreviewDialogTool,
   PreviewStatusTool,
+  PreviewSharedTabsTool,
   PreviewOpenTool,
   PreviewNavigateTool,
   PreviewResizeTool,
@@ -336,6 +353,7 @@ export const PreviewToolkit = Toolkit.make(
 export const PreviewStandardToolkit = Toolkit.make(
   PreviewDialogTool,
   PreviewStatusTool,
+  PreviewSharedTabsTool,
   PreviewOpenTool,
   PreviewNavigateTool,
   PreviewResizeTool,

@@ -17,6 +17,7 @@ import {
   type PreviewAutomationNavigateInput,
   type PreviewAutomationNetworkEntry,
   type PreviewAutomationOpenInput,
+  previewAutomationBrowserBinding,
   type PreviewAutomationPressInput,
   type PreviewAutomationRequest,
   type PreviewAutomationResizeInput,
@@ -67,6 +68,9 @@ import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ManagedBrowserPreviewAdapter from "../browser/ManagedBrowserPreviewAdapter.ts";
+import { attachDefaultOpen, readThreadAttachment } from "../browser/ManagedBrowserThreadAttachment.ts";
+import type { ManagedBrowserViewerIdentity } from "../browser/ManagedBrowserViewer.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
 import * as PreviewManager from "./Manager.ts";
@@ -153,11 +157,29 @@ export type ServerBrowserViewerOutput =
       readonly ack: Effect.Effect<void>;
     }
   | { readonly _tag: "viewport"; readonly width: number; readonly height: number }
+  /** Managed browsers: what is being shown, and whether the whole Chrome window can be shown instead. */
+  | {
+      readonly _tag: "surface";
+      readonly current: "page" | "window";
+      readonly window: { readonly available: boolean; readonly reason?: string };
+    }
   | {
       readonly _tag: "control";
       readonly canOperate: boolean;
-      readonly controller: "agent" | "you" | "another-viewer" | "unclaimed";
+      /**
+       * `held-for-you` and `paused` exist only for a managed browser: control that waits for this person to
+       * come back, and a browser nobody may act in until someone takes control on purpose.
+       */
+      readonly controller:
+        | "agent"
+        | "you"
+        | "another-viewer"
+        | "unclaimed"
+        | "held-for-you"
+        | "paused";
       readonly generation: number;
+      /** While control is held for a reconnect: when the hold ends and the browser pauses. */
+      readonly holdExpiresAtMs?: number;
       readonly dialog: {
         readonly type: string;
         readonly message: string;
@@ -191,6 +213,8 @@ export type ServerBrowserViewerOutput =
       readonly fileName: string;
       readonly sizeBytes: number;
     }
+  /** A viewer message that was not carried out, and why, so a refused action is never silent. */
+  | { readonly _tag: "rejected"; readonly type: string; readonly reason: string }
   | { readonly _tag: "gone" }
   /** The page is still open, but this connection to it ended; the viewer reconnects. */
   | { readonly _tag: "reconnect" };
@@ -210,6 +234,10 @@ export class ServerBrowser extends Context.Service<
       readonly maxHeight: number;
       readonly quality: number;
       readonly canOperate: boolean;
+      /** Who is watching. A managed browser tab is shown only to a viewer it names; ordinary tabs ignore this. */
+      readonly viewer?: ManagedBrowserViewerIdentity;
+      /** Names this viewer across reconnects, so control held for it can be resumed by it alone. */
+      readonly viewerKey?: string;
     }) => Effect.Effect<
       ServerBrowserViewer,
       ServerBrowserTabNotFoundError | ServerBrowserLaunchError,
@@ -234,6 +262,8 @@ export class ServerBrowser extends Context.Service<
       readonly threadId: string;
       readonly tabId: string;
       readonly downloadId: string;
+      /** Who is asking; a managed tab's files go only to a viewer it admits. */
+      readonly viewer?: ManagedBrowserViewerIdentity;
     }) => Effect.Effect<Option.Option<{ readonly path: string; readonly fileName: string }>>;
     /** Deletes a human profile's server-side storage, closing its open tabs first. */
     readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
@@ -440,6 +470,12 @@ const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
+  // Named sessions in a managed browser are optional; without it a named open fails by name.
+  const managedOption = yield* Effect.serviceOption(
+    ManagedBrowserPreviewAdapter.ManagedBrowserPreviewAdapter,
+  );
+  const managed = Option.getOrUndefined(managedOption);
+  const managedOwns = (threadId: string, tabId: string) => managed?.owns(threadId, tabId) === true;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   // The fix every host error names, rendered for how this server was launched.
@@ -975,13 +1011,18 @@ const make = Effect.gen(function* () {
     Effect.promise(() => setChooserFiles(input).catch(() => false));
 
   const openDownload: ServerBrowser["Service"]["openDownload"] = (input) =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
+      if (managed !== undefined && managedOwns(input.threadId, input.tabId)) {
+        return managed.openDownload(input.threadId, input.tabId, input.downloadId, input.viewer);
+      }
       const download = tabs
         .get(tabKey(input.threadId, input.tabId))
         ?.downloads.find((candidate) => candidate.id === input.downloadId);
-      return download === undefined
-        ? Option.none()
-        : Option.some({ path: download.path, fileName: download.fileName });
+      return Effect.succeed(
+        download === undefined
+          ? Option.none()
+          : Option.some({ path: download.path, fileName: download.fileName }),
+      );
     });
 
   const preparedContexts = new WeakSet<BrowserContext>();
@@ -1031,6 +1072,12 @@ const make = Effect.gen(function* () {
   };
 
   const ensureTab = (snapshot: PreviewSessionSnapshot): Promise<ServerTab> => {
+    // A managed session is published like any server session, but its page is not ours to build.
+    if (snapshot.managed !== undefined || managedOwns(snapshot.threadId, snapshot.tabId)) {
+      return Promise.reject(
+        new ServerBrowserTabNotFoundError({ threadId: snapshot.threadId, tabId: snapshot.tabId }),
+      );
+    }
     const key = tabKey(snapshot.threadId, snapshot.tabId);
     const pending = pendingTabs.get(key);
     if (pending) return pending;
@@ -1058,7 +1105,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const existing = tabs.get(tabKey(threadId, tabId));
       if (existing) return existing;
-      const { sessions } = yield* manager.list({ threadId: ThreadId.make(threadId) });
+      const { sessions } = yield* manager.list({ threadId: ThreadId.make(threadId) }).pipe(Effect.mapError((cause) => new ServerBrowserLaunchError({ cause })));
       const snapshot = sessions.find(
         (session) => session.tabId === tabId && session.runtime === "server",
       );
@@ -1457,8 +1504,28 @@ const make = Effect.gen(function* () {
     }
   };
 
-  const runOperation = async (request: PreviewAutomationRequest): Promise<unknown> => {
+  const isNamedOpen = (request: PreviewAutomationRequest) =>
+    previewAutomationBrowserBinding(request) !== undefined;
+
+  const runOperation = async (called: PreviewAutomationRequest): Promise<unknown> => {
+    let request = called;
+    try {
+      if (called.operation === "open") request = attachDefaultOpen(called, readThreadAttachment(config.stateDir, called.threadId));
+    } catch {
+      throw new ServerBrowserPage.ServerBrowserOperationError("PreviewAutomationUnsupportedClientError", "The saved managed browser selection could not be read. No ordinary browser was substituted.");
+    }
     const input = request.input;
+    // A named open, or any operation on a tab a managed browser holds, never touches an ordinary page.
+    // Without a managed browser a named open is refused rather than quietly served as a temporary tab.
+    if (managed !== undefined ? managed.claims(request) : isNamedOpen(request)) {
+      if (managed === undefined) {
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationUnsupportedClientError",
+          "This server has no managed browser, so a named browser session cannot be opened. No temporary browser is substituted.",
+        );
+      }
+      return Effect.runPromise(managed.handle(request));
+    }
     switch (request.operation) {
       case "status":
         return statusWithTitle(
@@ -1732,6 +1799,13 @@ const make = Effect.gen(function* () {
 
   const mirrorManagerEvent = (event: PreviewEvent) =>
     Effect.promise(async () => {
+      // A managed session is the adapter's: it builds no page here and learns when its session closes.
+      if (managed !== undefined && managedOwns(event.threadId, event.tabId)) {
+        // The close may wait for the browser to hand over control, so it never holds up other events.
+        if (event.type === "closed")
+          runFork(managed.sessionClosed(event.threadId, event.tabId).pipe(Effect.ignore));
+        return;
+      }
       if (event.type === "opened" && event.snapshot.runtime === "server") {
         await ensureTab(event.snapshot).catch(constVoid);
         return;
@@ -1915,6 +1989,18 @@ const make = Effect.gen(function* () {
 
   const attachViewer: ServerBrowser["Service"]["attachViewer"] = (input) =>
     Effect.gen(function* () {
+      if (managed !== undefined && managedOwns(input.threadId, input.tabId)) {
+        return yield* managed.attachViewer({ ...input, viewer: input.viewer }).pipe(
+          Effect.mapError((error) =>
+            error.reason === "notFound"
+              ? new ServerBrowserTabNotFoundError({
+                  threadId: input.threadId,
+                  tabId: input.tabId,
+                })
+              : new ServerBrowserLaunchError({ cause: error.cause ?? error }),
+          ),
+        );
+      }
       const tab = yield* findTab(input.threadId, input.tabId);
       const output = yield* Queue.make<ServerBrowserViewerOutput>({
         capacity: VIEWER_OUTPUT_LIMIT,

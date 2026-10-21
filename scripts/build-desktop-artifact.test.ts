@@ -25,6 +25,7 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  STEALTH_BROWSER_EXTRA_RESOURCES,
   LINUX_CAPTURE_EXTRA_RESOURCES,
   LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
   LINUX_FILE_EXCLUSIONS,
@@ -570,6 +571,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!apps/desktop/resources/browser-secret/**/*",
       "!apps/desktop/prod-resources/browser-secret",
       "!apps/desktop/prod-resources/browser-secret/**/*",
+      "!apps/desktop/resources/stealth-browser",
+      "!apps/desktop/resources/stealth-browser/**/*",
+      "!apps/desktop/prod-resources/stealth-browser",
+      "!apps/desktop/prod-resources/stealth-browser/**/*",
       "!apps/desktop/prod-resources/windows-server",
       "!apps/desktop/prod-resources/windows-server/**/*",
       "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
@@ -586,6 +591,73 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       },
     ]);
   });
+
+  it.effect(
+    "ships the managed browser baseline outside app.asar, and only when it was staged",
+    () =>
+      Effect.gen(function* () {
+        const without = yield* createBuildConfig(
+          "linux",
+          "AppImage",
+          "1.2.3",
+          false,
+          false,
+          undefined,
+          undefined,
+          false,
+          "x64",
+        );
+        const withBaseline = yield* createBuildConfig(
+          "linux",
+          "AppImage",
+          "1.2.3",
+          false,
+          false,
+          undefined,
+          undefined,
+          false,
+          "x64",
+          true,
+        );
+        // Listing a resource that was never staged fails electron-builder, so the entry follows staging.
+        assert.notDeepInclude(
+          without.extraResources as ReadonlyArray<unknown>,
+          STEALTH_BROWSER_EXTRA_RESOURCES[0],
+        );
+        assert.deepInclude(
+          withBaseline.extraResources as ReadonlyArray<unknown>,
+          STEALTH_BROWSER_EXTRA_RESOURCES[0],
+        );
+        // A Mac build carries it the same way: beside the app's other native resources, never signed in place.
+        const mac = yield* createBuildConfig(
+          "mac",
+          "dmg",
+          "1.2.3",
+          false,
+          false,
+          undefined,
+          undefined,
+          false,
+          "arm64",
+          true,
+        );
+        assert.deepInclude(
+          mac.extraResources as ReadonlyArray<unknown>,
+          STEALTH_BROWSER_EXTRA_RESOURCES[0],
+        );
+        // Excluded from the asar either way, so the server reads real files.
+        for (const config of [without, withBaseline, mac]) {
+          assert.include(
+            config.files as ReadonlyArray<string>,
+            "!apps/desktop/prod-resources/stealth-browser/**/*",
+          );
+          assert.include(
+            config.files as ReadonlyArray<string>,
+            "!apps/desktop/resources/stealth-browser/**/*",
+          );
+        }
+      }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
 
   it.effect("applies platform-specific packaging to the build config", () =>
     Effect.gen(function* () {

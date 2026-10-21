@@ -1,6 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ManagedBrowserInstanceId,
+  ManagedBrowserProfileId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -22,6 +27,20 @@ describe("normalizePreviewOpenInput", () => {
 
   it("preserves an explicit background-only opt-out", () => {
     expect(normalizePreviewOpenInput({ open: false })).toEqual({
+      open: false,
+      reuseExistingTab: true,
+      show: false,
+    });
+  });
+
+  it("passes a named browser binding through untouched", () => {
+    const browserBinding = {
+      ownerEnvironmentId: EnvironmentId.make("environment-owner"),
+      instanceId: ManagedBrowserInstanceId.make("instance-1"),
+      profileId: ManagedBrowserProfileId.make("profile-1"),
+    };
+    expect(normalizePreviewOpenInput({ browserBinding, open: false })).toEqual({
+      browserBinding,
       open: false,
       reuseExistingTab: true,
       show: false,

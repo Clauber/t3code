@@ -41,6 +41,50 @@ describe("PreviewAutomationOpenInput", () => {
   it("retains the legacy show visibility alias", () => {
     expect(decodeOpenInput({ show: false })).toEqual({ show: false });
   });
+
+  const browserBinding = {
+    ownerEnvironmentId: "env-owner",
+    instanceId: "instance-1",
+    profileId: "profile-1",
+  };
+
+  it("accepts sharing and joining a managed tab only beside a browser binding", () => {
+    expect(decodeOpenInput({ browserBinding, shareTab: true }).shareTab).toBe(true);
+    expect(
+      decodeOpenInput({ browserBinding, joinTab: { engineTabId: "tab-1", incarnation: "boot-1" } })
+        .joinTab,
+    ).toEqual({ engineTabId: "tab-1", incarnation: "boot-1" });
+    expect(() => decodeOpenInput({ shareTab: true })).toThrow();
+    expect(() => decodeOpenInput({ joinTab: { engineTabId: "tab-1" } })).toThrow();
+    expect(() => decodeOpenInput({ browserBinding, joinTab: {} })).toThrow();
+  });
+});
+
+describe("a managed session's snapshot", () => {
+  it("says where the page lives, and older snapshots without it still decode", () => {
+    const base = {
+      threadId: "thread-1",
+      tabId: "tab-1",
+      navStatus: { _tag: "Idle" },
+      canGoBack: false,
+      canGoForward: false,
+      updatedAt: "2026-10-16T00:00:00.000Z",
+    };
+    expect(decodeSnapshot(base).managed).toBeUndefined();
+    const managed = {
+      ownerEnvironmentId: "env-owner",
+      instanceId: "instance-1",
+      profileId: "profile-1",
+      incarnation: "boot-1",
+      engineTabId: "tab-1",
+      hostThreadId: "remote:env-peer:thread-1",
+      hostTabId: "tab-9",
+      shared: true,
+      remote: true,
+    };
+    expect(decodeSnapshot({ ...base, managed }).managed).toEqual(managed);
+    expect(() => decodeSnapshot({ ...base, managed: { ...managed, remote: undefined } })).toThrow();
+  });
 });
 
 describe("PreviewNavStatus", () => {

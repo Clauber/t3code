@@ -1,3 +1,4 @@
+import { configureManagedProxy, isManagedProfile } from "./ManagedProfile.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Names download files on the shared disk.
 /**
  * The desktop end of the desktop browser channel (see `DesktopBrowserEvent` in
@@ -23,7 +24,7 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import { createCdpRelayConnection, type CdpRelayConnection } from "./CdpRelay.ts";
+import { createCdpRelayConnection, createMainWorldScriptInstaller, type CdpRelayConnection } from "./CdpRelay.ts";
 
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(DesktopBrowserEvent));
 const decodeCommand = Schema.decodeUnknownOption(Schema.fromJsonString(DesktopBrowserCommand));
@@ -46,6 +47,9 @@ interface AttachedTab {
   readonly key: DesktopBrowserTabKey;
   readonly debuggee: DesktopBrowserTabDebugger;
   relay: CdpRelayConnection | null;
+  /** A managed browser tab: the engine drives it, so only the relay sees where the agent clicks. */
+  readonly managed: boolean;
+  readonly installMainWorldScript: (source: string) => Promise<void>;
   /** Where the server wants this tab's downloads; null keeps Electron's own handling. */
   downloadDirectory: string | null;
   /** The guid CDP gave the download that is about to start. */
@@ -101,10 +105,18 @@ export const make = Effect.gen(function* () {
     const { webContents, debugger: debuggee } = tab.debuggee;
     const relay: CdpRelayConnection = createCdpRelayConnection(
       {
-        send: (method, params, sessionId) =>
-          sessionId === undefined
+        send: (method, params, sessionId) => {
+          if (tab.managed && sessionId === undefined && method === "Input.dispatchMouseEvent") {
+            const { type, x, y } = params as { type?: unknown; x?: unknown; y?: unknown };
+            if ((type === "mouseMoved" || type === "mousePressed") && typeof x === "number" && typeof y === "number")
+              runFork(PubSub.publish(pointers, { key: tab.key, phase: type === "mousePressed" ? ("click" as const) : ("move" as const), x, y }));
+          }
+          return sessionId === undefined
             ? debuggee.sendCommand(method, params)
-            : debuggee.sendCommand(method, params, sessionId),
+            : debuggee.sendCommand(method, params, sessionId);
+        },
+        installMainWorldScript: tab.installMainWorldScript,
+        configureManagedProxy: (proxy) => configureManagedProxy(webContents, proxy),
         targetId: () =>
           debuggee
             .sendCommand("Target.getTargetInfo")
@@ -159,6 +171,8 @@ export const make = Effect.gen(function* () {
       key,
       debuggee,
       relay: null,
+      managed: isManagedProfile(debuggee.webContents),
+      installMainWorldScript: createMainWorldScriptInstaller((method, params) => debuggee.debugger.sendCommand(method, params)),
       downloadDirectory: null,
       pendingDownloadGuid: null,
       onMessage: (_event, method, params, sessionId) => {

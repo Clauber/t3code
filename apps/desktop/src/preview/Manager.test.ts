@@ -188,7 +188,6 @@ const {
   clipboardItemConstructor,
   createFromPath,
   fromId,
-  getFocusedWebContents,
   mkdir,
   previewSession,
   showItemInFolder,
@@ -203,7 +202,6 @@ const {
     toPNG: () => Buffer.from("png"),
   })),
   fromId: vi.fn<(_id?: number) => Electron.WebContents | null>((_id?: number) => null),
-  getFocusedWebContents: vi.fn(() => null),
   mkdir: vi.fn((_path: string) => undefined),
   previewSession: { on: vi.fn() },
   showItemInFolder: vi.fn(),
@@ -233,7 +231,6 @@ vi.mock("electron", () => ({
   },
   webContents: {
     fromId,
-    getFocusedWebContents,
   },
 }));
 
@@ -437,6 +434,9 @@ const makeFaviconWebContents = (options?: {
   let currentUrl = options?.url ?? "http://localhost:3200/";
   let destroyed = false;
   let loading = false;
+  // "window": the guest's window has focus, as isFocused() reports for every
+  // guest in it. "page": the user's keys go to this page.
+  let focus: "none" | "window" | "page" = "none";
   const fetch = vi.fn(
     options?.fetch ??
       (async () =>
@@ -458,6 +458,10 @@ const makeFaviconWebContents = (options?: {
     id: options?.id ?? 42,
     isDestroyed: () => destroyed,
     getType: () => "webview",
+    isFocused: () => focus !== "none",
+    get focusedFrame() {
+      return focus === "page" ? {} : null;
+    },
     getURL: () => currentUrl,
     getTitle: () => "Preview",
     isLoading: () => loading,
@@ -498,6 +502,9 @@ const makeFaviconWebContents = (options?: {
     reload,
     setDestroyed: (value: boolean) => {
       destroyed = value;
+    },
+    setFocus: (value: typeof focus) => {
+      focus = value;
     },
     setLoading: (value: boolean) => {
       loading = value;
@@ -560,8 +567,6 @@ describe("PreviewManager", () => {
   beforeEach(() => {
     browserWindowConstructor.mockReset();
     fromId.mockClear();
-    getFocusedWebContents.mockReset();
-    getFocusedWebContents.mockReturnValue(null);
     mkdir.mockClear();
     previewSession.on.mockClear();
     writeFile.mockClear();
@@ -580,7 +585,7 @@ describe("PreviewManager", () => {
         const hostWebContents = { sendInputEvent, isDestroyed: () => false };
         Object.assign(preview.webContents, { hostWebContents });
         fromId.mockReturnValue(preview.webContents);
-        getFocusedWebContents.mockReturnValue(preview.webContents as never);
+        preview.setFocus("page");
         yield* manager.setMainWindow({
           isDestroyed: () => false,
           once: vi.fn(),
@@ -645,7 +650,7 @@ describe("PreviewManager", () => {
             hostWebContents: { isDestroyed: () => false, send },
           });
           fromId.mockReturnValue(preview.webContents);
-          getFocusedWebContents.mockReturnValue(preview.webContents as never);
+          preview.setFocus("page");
           yield* manager.createTab("tab_reopen");
           yield* manager.registerWebview("tab_reopen", 42);
           const shortcut = parseKeybindingShortcut(chord)!;
@@ -674,18 +679,46 @@ describe("PreviewManager", () => {
             expect(preventDefault).toHaveBeenCalledTimes("isAutoRepeat" in overrides ? 1 : 0);
             expect(send).toHaveBeenCalledOnce();
           }
-          getFocusedWebContents.mockReturnValue(null);
+          preview.setFocus("none");
           preventDefault.mockClear();
           beforeInput({ preventDefault } as never, input as never);
           expect(preventDefault).not.toHaveBeenCalled();
           expect(send).toHaveBeenCalledOnce();
-          getFocusedWebContents.mockReturnValue(preview.webContents as never);
+          preview.setFocus("page");
           yield* manager.setForwardedShortcuts([]);
           beforeInput({ preventDefault } as never, input as never);
           expect(preventDefault).not.toHaveBeenCalled();
           expect(send).toHaveBeenCalledOnce();
         }),
       ),
+  );
+
+  effectIt.effect("opens the app's find bar for Cmd+F only from the page holding the keys", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents();
+        const send = vi.fn();
+        Object.assign(preview.webContents, {
+          hostWebContents: { isDestroyed: () => false, send },
+        });
+        fromId.mockReturnValue(preview.webContents);
+        yield* manager.createTab("tab_find");
+        yield* manager.registerWebview("tab_find", 42);
+        const beforeInput = preview.listeners.get("before-input-event")!;
+        const input = { type: "keyDown", key: "f", meta: true, control: false, shift: false, alt: false };
+        const preventDefault = vi.fn();
+        // Another guest in the window: the key is not this page's to take.
+        preview.setFocus("window");
+        beforeInput({ preventDefault } as never, input as never);
+        expect(send).not.toHaveBeenCalled();
+        preview.setFocus("page");
+        beforeInput({ preventDefault } as never, input as never);
+        expect(preventDefault).toHaveBeenCalledOnce();
+        expect(send).toHaveBeenCalledExactlyOnceWith("desktop:menu-action", PreviewManager.PREVIEW_FIND_MENU_ACTION);
+        beforeInput({ preventDefault } as never, { ...input, shift: true } as never);
+        expect(send).toHaveBeenCalledOnce();
+      }),
+    ),
   );
 
   effectIt.effect.each([
@@ -707,7 +740,7 @@ describe("PreviewManager", () => {
               hostWebContents: { isDestroyed: () => false, send },
             });
             fromId.mockReturnValue(preview.webContents);
-            getFocusedWebContents.mockReturnValue(preview.webContents as never);
+            preview.setFocus("page");
             yield* manager.createTab("tab_alt_graph");
             yield* manager.registerWebview("tab_alt_graph", 42);
             yield* manager.setForwardedShortcuts([
@@ -749,7 +782,7 @@ describe("PreviewManager", () => {
 
         for (const browser of [preview, popup]) {
           const contents = browser.webContents as Electron.WebContents;
-          getFocusedWebContents.mockReturnValue(browser.webContents as never);
+          browser.setFocus("page");
           const beforeInput = browser.listeners.get("before-input-event")!;
           const preventDefault = vi.fn();
           const input = {
@@ -773,11 +806,43 @@ describe("PreviewManager", () => {
           expect(contents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(true);
 
           // An injected paste in an unfocused guest cannot edit the active renderer.
-          getFocusedWebContents.mockReturnValue(null);
+          browser.setFocus("none");
           beforeInput({ preventDefault } as never, input as never);
           expect(contents.setIgnoreMenuShortcuts).toHaveBeenLastCalledWith(true);
           expect(preventDefault).not.toHaveBeenCalled();
         }
+      }),
+    ),
+  );
+
+  effectIt.effect("keeps editing shortcuts for the focused tab when several tabs are open", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const first = makeFaviconWebContents({ id: 42 });
+        const second = makeFaviconWebContents({ id: 43 });
+        const hostWebContents = { isDestroyed: () => false, send: vi.fn() };
+        for (const browser of [first, second]) {
+          Object.assign(browser.webContents, { hostWebContents });
+        }
+        fromId.mockImplementation((id) => (id === 43 ? second : first).webContents);
+        yield* manager.createTab("tab_first");
+        yield* manager.registerWebview("tab_first", 42);
+        yield* manager.createTab("tab_second");
+        yield* manager.registerWebview("tab_second", 43);
+        first.setFocus("window");
+        second.setFocus("page");
+
+        const paste = { type: "keyDown", key: "v", meta: true, control: false, shift: false };
+        const pasteInto = (browser: typeof first) => {
+          browser.listeners.get("before-input-event")!(
+            { preventDefault: vi.fn() } as never,
+            { ...paste, alt: false } as never,
+          );
+          return (browser.webContents as Electron.WebContents).setIgnoreMenuShortcuts;
+        };
+        expect(pasteInto(second)).toHaveBeenLastCalledWith(false);
+        // An injected paste in the background tab must not reach the menu.
+        expect(pasteInto(first)).toHaveBeenLastCalledWith(true);
       }),
     ),
   );

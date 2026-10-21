@@ -2,11 +2,13 @@ import previewStreamScript from "@t3tools/mobile-preview-stream";
 import {
   previewStreamControlLabel,
   previewStreamHostSetupMessage,
+  type PreviewStreamSurface,
   type PreviewStreamControl,
   type PreviewStreamDownload,
   type PreviewStreamFileChooser,
   type PreviewStreamInput,
 } from "@t3tools/client-runtime/preview/server-browser-stream";
+import { describeManagedControl } from "@t3tools/client-runtime/managed-browser";
 import type { EnvironmentId, PreviewStreamHostSetup } from "@t3tools/contracts";
 import {
   useEffect,
@@ -25,6 +27,7 @@ import * as Clipboard from "expo-clipboard";
 import { AppText } from "../../components/AppText";
 import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { beginForegroundHandoff } from "../../lib/foreground-handoff";
+import { uuidv4 } from "../../lib/uuid";
 import { usePreviewStreamAccess } from "../../state/preview";
 
 import {
@@ -114,7 +117,7 @@ function offerDownload(download: PreviewStreamDownload) {
 const MAX_REFUSALS = 3;
 
 export function PreviewStreamWebView(
-  props: Omit<PreviewStreamConfiguration, "access"> &
+  props: Omit<PreviewStreamConfiguration, "access" | "viewerKey"> &
     Omit<NativeStreamBridge, "onUnauthorized"> & {
       readonly environmentId: EnvironmentId;
       readonly paused?: boolean;
@@ -161,7 +164,7 @@ export function PreviewStreamWebView(
 function AuthorizedPreviewStream({
   ref,
   ...props
-}: PreviewStreamConfiguration & NativeStreamBridge) {
+}: Omit<PreviewStreamConfiguration, "viewerKey"> & NativeStreamBridge) {
   const [attempt, setAttempt] = useState(0);
   const [previousAccess, setPreviousAccess] = useState(props.access);
   // Wait for refreshed access, including cookie credentials with unchanged JSON.
@@ -178,12 +181,15 @@ function AuthorizedPreviewStream({
     },
     [],
   );
+  // One name for as long as this view is mounted, across reconnects and fresh tickets.
+  const [viewerKey] = useState(uuidv4);
   const configuration = JSON.stringify({
     access: props.access,
     threadId: props.threadId,
     tabId: props.tabId,
     interactive: props.interactive,
     background: props.background,
+    viewerKey,
   } satisfies PreviewStreamConfiguration);
   return (
     <PreviewStreamDocumentView
@@ -256,6 +262,17 @@ function PreviewStreamDocumentView({
   const [hostSetup, setHostSetup] = useState<PreviewStreamHostSetup | null>(null);
   const [started, setStarted] = useState(false);
   const [control, setControl] = useState<PreviewStreamControl | null>(null);
+  // Only a shared browser reports its surface; ordinary tabs keep the plain control row.
+  const [surface, setSurface] = useState<PreviewStreamSurface | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const holdEndsAt = control?.holdExpiresAtMs;
+  useEffect(() => {
+    if (holdEndsAt === undefined) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, [holdEndsAt]);
+  const managedControl = surface === null ? null : describeManagedControl(control, now);
   const [promptText, setPromptText] = useState("");
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
   const answerFileChooser = (pick: boolean) => {
@@ -323,11 +340,61 @@ function PreviewStreamDocumentView({
   return (
     <View className="flex-1" style={{ backgroundColor: background }}>
       {!compact ? (
-        <View className="flex-row items-center justify-between gap-2 border-b border-secondary-border px-3 py-2">
-          <AppText className="text-xs text-foreground-muted">
-            {previewStreamControlLabel(control)}
-          </AppText>
-          {control?.canOperate ? (
+        <View className="flex-row flex-wrap items-center justify-between gap-2 border-b border-secondary-border px-3 py-2">
+          <View className="min-w-0 flex-1">
+            <AppText className="text-xs text-foreground-muted">
+              {managedControl ? managedControl.label : previewStreamControlLabel(control)}
+            </AppText>
+            {managedControl?.detail ? (
+              <AppText className="text-[11px] text-foreground-muted">
+                {managedControl.detail}
+              </AppText>
+            ) : null}
+          </View>
+          {surface ? (
+            <View className="flex-row gap-2">
+              {(["page", "window"] as const).map((choice) => {
+                const unavailable = choice === "window" && !surface.window.available;
+                return (
+                  <Pressable
+                    key={choice}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      choice === "page" ? "Show the page" : "Show the full window"
+                    }
+                    accessibilityState={{
+                      selected: surface.current === choice,
+                      disabled: unavailable,
+                    }}
+                    disabled={unavailable}
+                    className={`rounded-full border px-3 py-2 ${surface.current === choice ? "border-secondary-border bg-secondary" : "border-secondary-border"} ${unavailable ? "opacity-50" : ""}`}
+                    onPress={() => command({ type: "surface", surface: choice })}
+                  >
+                    <AppText className="text-xs text-secondary-foreground">
+                      {choice === "page" ? "Page" : "Full window"}
+                    </AppText>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
+          {managedControl ? (
+            managedControl.action ? (
+              <Pressable
+                accessibilityRole="button"
+                className="rounded-full border border-secondary-border bg-secondary px-3 py-2"
+                onPress={() =>
+                  command({
+                    type: managedControl.action === "release" ? "releaseControl" : "takeControl",
+                  })
+                }
+              >
+                <AppText className="text-xs text-secondary-foreground">
+                  {managedControl.actionLabel}
+                </AppText>
+              </Pressable>
+            ) : null
+          ) : control?.canOperate ? (
             <Pressable
               accessibilityRole="button"
               disabled={control.controller === "another-viewer"}
@@ -341,6 +408,11 @@ function PreviewStreamDocumentView({
                 {control.controller === "you" ? "Release control" : "Take control"}
               </AppText>
             </Pressable>
+          ) : null}
+          {surface && !surface.window.available && surface.window.reason ? (
+            <AppText className="w-full text-[11px] text-foreground-muted">
+              Full window: {surface.window.reason}
+            </AppText>
           ) : null}
         </View>
       ) : null}
@@ -371,6 +443,9 @@ function PreviewStreamDocumentView({
           const message = previewStreamMessage(event.nativeEvent.data);
           if (message === null) return;
           switch (message.type) {
+            case "surface":
+              setSurface(message);
+              return;
             case "control":
               setControl(message);
               setPromptText(message.dialog?.defaultValue ?? "");

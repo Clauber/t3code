@@ -33,6 +33,7 @@ import {
   PinnedRuntimeInstallError,
   pinnedRuntimePaths,
 } from "../cloud/pinnedRuntime.ts";
+import { hostingMarkerPath, managedBrowserHosted } from "../browser/managedBrowserMaintenance.ts";
 import { compareExactServiceVersions, isExactServiceVersion } from "../cloud/serviceProtocol.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
@@ -328,7 +329,7 @@ const belongsToBootService = Effect.fn("cli.update.belongs_to_boot_service")(fun
   return false;
 });
 
-const runUpdate = Effect.fn("cli.update.run")(function* (input: {
+export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly baseDir: string;
   readonly logsDir: string;
   readonly serverRuntimeStatePath: string;
@@ -336,6 +337,8 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly requestedVersion: string | undefined;
   readonly allowDowngrade: boolean;
   readonly assumeYes: boolean;
+  /** The service layer for the version being installed; tests supply a fake. */
+  readonly bootService?: (cliVersion: string) => Layer.Layer<BootService.BootService>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -460,12 +463,20 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       ? ""
       : `${currentVersion} → ${targetVersion}${targetChannel === "stable" ? "" : ` (${targetChannel})`}`,
   );
+  // This command has no authenticated way to close a running server's browser admission, so it cannot
+  // drain atomically. A server that hosts managed browsers is therefore never restarted from here.
+  const browserHosted = () =>
+    managedBrowserHosted(hostingMarkerPath(path.dirname(input.serverRuntimeStatePath)));
+  const browserHostedNotice =
+    "  This server hosts managed browsers, so the service keeps running its current version. Update from the app, which waits for the browsers to be idle, or run `t3 service restart` yourself when that is acceptable.";
   let restartService = false;
   if (serviceInstalled && !serviceCurrent) {
     yield* Console.log(
       "  A background service is installed for this T3 home. Restarting it interrupts anything running in it: agent turns, terminals, remote clients.",
     );
-    if (input.assumeYes) {
+    if (browserHosted()) {
+      yield* Console.log(browserHostedNotice);
+    } else if (input.assumeYes) {
       restartService = true;
     } else if (process.stdin.isTTY && process.stdout.isTTY) {
       restartService = yield* Prompt.run(
@@ -546,6 +557,11 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   // version; only the restart itself waits for the user's answer.
   let serviceUpdated = false;
   if (serviceInstalled && !serviceCurrent) {
+    // A server may have begun hosting browsers while the new version was prepared.
+    if (restartService && browserHosted()) {
+      restartService = false;
+      yield* Console.log(browserHostedNotice);
+    }
     yield* Console.log(
       restartService
         ? "Restarting the background service..."
@@ -556,11 +572,11 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
         target.install({ allowDowngrade: input.allowDowngrade, start: restartService }),
       ),
       Effect.provide(
-        BootService.layer({
-          baseDir: input.baseDir,
-          logsDir: input.logsDir,
-          cliVersion: targetVersion,
-        }),
+        (
+          input.bootService ??
+          ((cliVersion) =>
+            BootService.layer({ baseDir: input.baseDir, logsDir: input.logsDir, cliVersion }))
+        )(targetVersion),
       ),
       Effect.mapError(
         (error) =>

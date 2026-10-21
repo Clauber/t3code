@@ -1,0 +1,3027 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "json": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "maxLength": 700000,
+          "minLength": 0
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/json"
+          },
+          "maxItems": 4096
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/json"
+          }
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "hello"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "const": 1
+            },
+            "adapterVersion": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "adapterVersion"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "open"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "ownerEnvironmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "browserName": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId"
+              ],
+              "additionalProperties": false
+            },
+            "caller": {
+              "type": "object",
+              "properties": {
+                "environmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "agentSessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "callerId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "kind": {
+                  "enum": [
+                    "agent",
+                    "human",
+                    "supervisor"
+                  ]
+                }
+              },
+              "required": [
+                "environmentId",
+                "threadId",
+                "agentSessionId"
+              ],
+              "additionalProperties": false
+            },
+            "fence": {
+              "type": "object",
+              "properties": {
+                "incarnation": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "incarnation",
+                "generation"
+              ],
+              "additionalProperties": false
+            },
+            "tabId": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 65536,
+              "minLength": 1
+            },
+            "route": {
+              "enum": [
+                "direct",
+                "vpn",
+                "residential"
+              ]
+            },
+            "endpoint": {
+              "type": "string",
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^ws://127\\.0\\.0\\.1:[0-9]{1,5}/[A-Za-z0-9_-]{16,128}$"
+            }
+          },
+          "required": [
+            "resource",
+            "caller",
+            "fence",
+            "tabId",
+            "url"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "attach"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "ownerEnvironmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "browserName": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId"
+              ],
+              "additionalProperties": false
+            },
+            "caller": {
+              "type": "object",
+              "properties": {
+                "environmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "agentSessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "callerId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "kind": {
+                  "enum": [
+                    "agent",
+                    "human",
+                    "supervisor"
+                  ]
+                }
+              },
+              "required": [
+                "environmentId",
+                "threadId",
+                "agentSessionId"
+              ],
+              "additionalProperties": false
+            },
+            "tabId": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            },
+            "endpoint": {
+              "type": "string",
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^ws://127\\.0\\.0\\.1:[0-9]{1,5}/[A-Za-z0-9_-]{16,128}$"
+            }
+          },
+          "required": [
+            "resource",
+            "caller",
+            "tabId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "execute"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "ownerEnvironmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "browserName": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId"
+              ],
+              "additionalProperties": false
+            },
+            "caller": {
+              "type": "object",
+              "properties": {
+                "environmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "agentSessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "callerId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "kind": {
+                  "enum": [
+                    "agent",
+                    "human",
+                    "supervisor"
+                  ]
+                }
+              },
+              "required": [
+                "environmentId",
+                "threadId",
+                "agentSessionId"
+              ],
+              "additionalProperties": false
+            },
+            "fence": {
+              "type": "object",
+              "properties": {
+                "incarnation": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "incarnation",
+                "generation"
+              ],
+              "additionalProperties": false
+            },
+            "ref": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "tabId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "incarnation": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId",
+                "tabId",
+                "incarnation"
+              ],
+              "additionalProperties": false
+            },
+            "documentId": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            },
+            "operation": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "navigate"
+                    },
+                    "url": {
+                      "type": "string",
+                      "maxLength": 65536,
+                      "minLength": 1
+                    },
+                    "waitUntil": {
+                      "enum": [
+                        "commit",
+                        "domcontentloaded",
+                        "load"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "url",
+                    "waitUntil"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "snapshot"
+                    },
+                    "format": {
+                      "enum": [
+                        "aria",
+                        "text",
+                        "html"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "format"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "screenshot"
+                    },
+                    "format": {
+                      "enum": [
+                        "png",
+                        "jpeg"
+                      ]
+                    },
+                    "fullPage": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "format",
+                    "fullPage"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "click"
+                    },
+                    "target": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        },
+                        "documentId": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "documentId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "button": {
+                      "enum": [
+                        "left",
+                        "middle",
+                        "right"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "target",
+                    "button"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "fill"
+                    },
+                    "target": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        },
+                        "documentId": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "documentId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "value": {
+                      "type": "string",
+                      "maxLength": 262144,
+                      "minLength": 0
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "target",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "type"
+                    },
+                    "target": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        },
+                        "documentId": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "documentId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "value": {
+                      "type": "string",
+                      "maxLength": 262144,
+                      "minLength": 0
+                    },
+                    "delayMs": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "target",
+                    "value",
+                    "delayMs"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "press"
+                    },
+                    "target": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        },
+                        "documentId": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "documentId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "key": {
+                      "type": "string",
+                      "maxLength": 128,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "target",
+                    "key"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "select"
+                    },
+                    "target": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        },
+                        "documentId": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "documentId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 262144,
+                        "minLength": 0
+                      },
+                      "maxItems": 100
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "target",
+                    "values"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "check"
+                    },
+                    "target": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        },
+                        "documentId": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "documentId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "checked": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "target",
+                    "checked"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "hover"
+                    },
+                    "target": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        },
+                        "documentId": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "documentId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "target"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "evaluate"
+                    },
+                    "expression": {
+                      "type": "string",
+                      "maxLength": 65536,
+                      "minLength": 1
+                    },
+                    "argument": {
+                      "$ref": "#/$defs/json"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "expression",
+                    "argument"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "dialog"
+                    },
+                    "dialogId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "accept": {
+                      "type": "boolean"
+                    },
+                    "promptText": {
+                      "type": "string",
+                      "maxLength": 262144,
+                      "minLength": 0
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "dialogId",
+                    "accept"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "upload"
+                    },
+                    "target": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        },
+                        "documentId": {
+                          "type": "string",
+                          "maxLength": 512,
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "documentId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "artifactIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 512,
+                        "minLength": 1
+                      },
+                      "maxItems": 32
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "target",
+                    "artifactIds"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "console"
+                    },
+                    "cursor": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 500
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "limit"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "network"
+                    },
+                    "cursor": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 500
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "limit"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "recording.start"
+                    },
+                    "fps": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 30
+                    },
+                    "maxDurationMs": {
+                      "type": "integer",
+                      "minimum": 100,
+                      "maximum": 60000
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "fps",
+                    "maxDurationMs"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "recording.stop"
+                    },
+                    "recordingId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "recordingId"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "resource",
+            "caller",
+            "fence",
+            "ref",
+            "documentId",
+            "operation"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "subscribe"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "ownerEnvironmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "browserName": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId"
+              ],
+              "additionalProperties": false
+            },
+            "caller": {
+              "type": "object",
+              "properties": {
+                "environmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "agentSessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "callerId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "kind": {
+                  "enum": [
+                    "agent",
+                    "human",
+                    "supervisor"
+                  ]
+                }
+              },
+              "required": [
+                "environmentId",
+                "threadId",
+                "agentSessionId"
+              ],
+              "additionalProperties": false
+            },
+            "ref": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "tabId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "incarnation": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId",
+                "tabId",
+                "incarnation"
+              ],
+              "additionalProperties": false
+            },
+            "subscriptionId": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            },
+            "surface": {
+              "enum": [
+                "page",
+                "window"
+              ]
+            },
+            "maxFps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            },
+            "maxWidth": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 4096
+            },
+            "maxHeight": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 4096
+            }
+          },
+          "required": [
+            "resource",
+            "caller",
+            "ref",
+            "subscriptionId",
+            "surface",
+            "maxFps",
+            "maxWidth",
+            "maxHeight"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "unsubscribe"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "ownerEnvironmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "browserName": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId"
+              ],
+              "additionalProperties": false
+            },
+            "caller": {
+              "type": "object",
+              "properties": {
+                "environmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "agentSessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "callerId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "kind": {
+                  "enum": [
+                    "agent",
+                    "human",
+                    "supervisor"
+                  ]
+                }
+              },
+              "required": [
+                "environmentId",
+                "threadId",
+                "agentSessionId"
+              ],
+              "additionalProperties": false
+            },
+            "subscriptionId": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "resource",
+            "caller",
+            "subscriptionId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "ack"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "ownerEnvironmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "browserName": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId"
+              ],
+              "additionalProperties": false
+            },
+            "caller": {
+              "type": "object",
+              "properties": {
+                "environmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "agentSessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "callerId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "kind": {
+                  "enum": [
+                    "agent",
+                    "human",
+                    "supervisor"
+                  ]
+                }
+              },
+              "required": [
+                "environmentId",
+                "threadId",
+                "agentSessionId"
+              ],
+              "additionalProperties": false
+            },
+            "subscriptionId": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            },
+            "frameId": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "resource",
+            "caller",
+            "subscriptionId",
+            "frameId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "viewerInput"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "ownerEnvironmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "browserName": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId"
+              ],
+              "additionalProperties": false
+            },
+            "caller": {
+              "type": "object",
+              "properties": {
+                "environmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "agentSessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "callerId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "kind": {
+                  "enum": [
+                    "agent",
+                    "human",
+                    "supervisor"
+                  ]
+                }
+              },
+              "required": [
+                "environmentId",
+                "threadId",
+                "agentSessionId"
+              ],
+              "additionalProperties": false
+            },
+            "fence": {
+              "type": "object",
+              "properties": {
+                "incarnation": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "incarnation",
+                "generation"
+              ],
+              "additionalProperties": false
+            },
+            "ref": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "tabId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "incarnation": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId",
+                "tabId",
+                "incarnation"
+              ],
+              "additionalProperties": false
+            },
+            "documentId": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            },
+            "subscriptionId": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            },
+            "input": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "pointer"
+                    },
+                    "action": {
+                      "enum": [
+                        "move",
+                        "down",
+                        "up"
+                      ]
+                    },
+                    "x": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 16384
+                    },
+                    "y": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 16384
+                    },
+                    "button": {
+                      "enum": [
+                        "left",
+                        "middle",
+                        "right"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "action",
+                    "x",
+                    "y",
+                    "button"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "wheel"
+                    },
+                    "deltaX": {
+                      "type": "number",
+                      "minimum": -100000,
+                      "maximum": 100000
+                    },
+                    "deltaY": {
+                      "type": "number",
+                      "minimum": -100000,
+                      "maximum": 100000
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "deltaX",
+                    "deltaY"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "key"
+                    },
+                    "action": {
+                      "enum": [
+                        "down",
+                        "up"
+                      ]
+                    },
+                    "key": {
+                      "type": "string",
+                      "maxLength": 128,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "action",
+                    "key"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "text"
+                    },
+                    "text": {
+                      "type": "string",
+                      "maxLength": 262144,
+                      "minLength": 0
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "text"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "const": "viewport"
+                    },
+                    "width": {
+                      "type": "integer",
+                      "minimum": 100,
+                      "maximum": 4096
+                    },
+                    "height": {
+                      "type": "integer",
+                      "minimum": 100,
+                      "maximum": 4096
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "width",
+                    "height"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "resource",
+            "caller",
+            "fence",
+            "ref",
+            "documentId",
+            "subscriptionId",
+            "input"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "upload"
+        },
+        "params": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "resource": {
+                  "type": "object",
+                  "properties": {
+                    "instanceId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "profileId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "ownerEnvironmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "browserName": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "instanceId",
+                    "profileId"
+                  ],
+                  "additionalProperties": false
+                },
+                "caller": {
+                  "type": "object",
+                  "properties": {
+                    "environmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "threadId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "agentSessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "callerId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "enum": [
+                        "agent",
+                        "human",
+                        "supervisor"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "environmentId",
+                    "threadId",
+                    "agentSessionId"
+                  ],
+                  "additionalProperties": false
+                },
+                "fence": {
+                  "type": "object",
+                  "properties": {
+                    "incarnation": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "generation": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "incarnation",
+                    "generation"
+                  ],
+                  "additionalProperties": false
+                },
+                "action": {
+                  "const": "begin"
+                },
+                "fileName": {
+                  "type": "string",
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "pattern": "^[^/\\\\\\u0000]+$"
+                },
+                "mimeType": {
+                  "type": "string",
+                  "maxLength": 255,
+                  "minLength": 1
+                },
+                "sizeBytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 33554432
+                },
+                "sha256": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "minLength": 64,
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "required": [
+                "resource",
+                "caller",
+                "fence",
+                "action",
+                "fileName",
+                "mimeType",
+                "sizeBytes",
+                "sha256"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "resource": {
+                  "type": "object",
+                  "properties": {
+                    "instanceId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "profileId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "ownerEnvironmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "browserName": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "instanceId",
+                    "profileId"
+                  ],
+                  "additionalProperties": false
+                },
+                "caller": {
+                  "type": "object",
+                  "properties": {
+                    "environmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "threadId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "agentSessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "callerId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "enum": [
+                        "agent",
+                        "human",
+                        "supervisor"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "environmentId",
+                    "threadId",
+                    "agentSessionId"
+                  ],
+                  "additionalProperties": false
+                },
+                "fence": {
+                  "type": "object",
+                  "properties": {
+                    "incarnation": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "generation": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "incarnation",
+                    "generation"
+                  ],
+                  "additionalProperties": false
+                },
+                "action": {
+                  "const": "write"
+                },
+                "artifactId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "offset": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "bytesBase64": {
+                  "type": "string",
+                  "maxLength": 349528,
+                  "minLength": 0,
+                  "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+                }
+              },
+              "required": [
+                "resource",
+                "caller",
+                "fence",
+                "action",
+                "artifactId",
+                "offset",
+                "bytesBase64"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "resource": {
+                  "type": "object",
+                  "properties": {
+                    "instanceId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "profileId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "ownerEnvironmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "browserName": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "instanceId",
+                    "profileId"
+                  ],
+                  "additionalProperties": false
+                },
+                "caller": {
+                  "type": "object",
+                  "properties": {
+                    "environmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "threadId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "agentSessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "callerId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "enum": [
+                        "agent",
+                        "human",
+                        "supervisor"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "environmentId",
+                    "threadId",
+                    "agentSessionId"
+                  ],
+                  "additionalProperties": false
+                },
+                "fence": {
+                  "type": "object",
+                  "properties": {
+                    "incarnation": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "generation": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "incarnation",
+                    "generation"
+                  ],
+                  "additionalProperties": false
+                },
+                "action": {
+                  "const": "finish"
+                },
+                "artifactId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "resource",
+                "caller",
+                "fence",
+                "action",
+                "artifactId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "resource": {
+                  "type": "object",
+                  "properties": {
+                    "instanceId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "profileId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "ownerEnvironmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "browserName": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "instanceId",
+                    "profileId"
+                  ],
+                  "additionalProperties": false
+                },
+                "caller": {
+                  "type": "object",
+                  "properties": {
+                    "environmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "threadId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "agentSessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "callerId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "enum": [
+                        "agent",
+                        "human",
+                        "supervisor"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "environmentId",
+                    "threadId",
+                    "agentSessionId"
+                  ],
+                  "additionalProperties": false
+                },
+                "fence": {
+                  "type": "object",
+                  "properties": {
+                    "incarnation": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "generation": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "incarnation",
+                    "generation"
+                  ],
+                  "additionalProperties": false
+                },
+                "action": {
+                  "const": "release"
+                },
+                "artifactId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "resource",
+                "caller",
+                "fence",
+                "action",
+                "artifactId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "download"
+        },
+        "params": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "resource": {
+                  "type": "object",
+                  "properties": {
+                    "instanceId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "profileId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "ownerEnvironmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "browserName": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "instanceId",
+                    "profileId"
+                  ],
+                  "additionalProperties": false
+                },
+                "caller": {
+                  "type": "object",
+                  "properties": {
+                    "environmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "threadId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "agentSessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "callerId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "enum": [
+                        "agent",
+                        "human",
+                        "supervisor"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "environmentId",
+                    "threadId",
+                    "agentSessionId"
+                  ],
+                  "additionalProperties": false
+                },
+                "action": {
+                  "const": "read"
+                },
+                "artifactId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "offset": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "length": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 262144
+                }
+              },
+              "required": [
+                "resource",
+                "caller",
+                "action",
+                "artifactId",
+                "offset",
+                "length"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "resource": {
+                  "type": "object",
+                  "properties": {
+                    "instanceId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "profileId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "ownerEnvironmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "sessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "browserName": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "instanceId",
+                    "profileId"
+                  ],
+                  "additionalProperties": false
+                },
+                "caller": {
+                  "type": "object",
+                  "properties": {
+                    "environmentId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "threadId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "agentSessionId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "callerId": {
+                      "type": "string",
+                      "maxLength": 512,
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "enum": [
+                        "agent",
+                        "human",
+                        "supervisor"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "environmentId",
+                    "threadId",
+                    "agentSessionId"
+                  ],
+                  "additionalProperties": false
+                },
+                "action": {
+                  "const": "release"
+                },
+                "artifactId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "resource",
+                "caller",
+                "action",
+                "artifactId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "closeTab"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "ownerEnvironmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "browserName": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId"
+              ],
+              "additionalProperties": false
+            },
+            "caller": {
+              "type": "object",
+              "properties": {
+                "environmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "threadId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "agentSessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "callerId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "kind": {
+                  "enum": [
+                    "agent",
+                    "human",
+                    "supervisor"
+                  ]
+                }
+              },
+              "required": [
+                "environmentId",
+                "threadId",
+                "agentSessionId"
+              ],
+              "additionalProperties": false
+            },
+            "fence": {
+              "type": "object",
+              "properties": {
+                "incarnation": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "incarnation",
+                "generation"
+              ],
+              "additionalProperties": false
+            },
+            "ref": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "tabId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "incarnation": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId",
+                "tabId",
+                "incarnation"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "resource",
+            "caller",
+            "fence",
+            "ref"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "shutdown"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "requireIdle": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "requireIdle"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "setControlGeneration"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "ownerEnvironmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "browserName": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId"
+              ],
+              "additionalProperties": false
+            },
+            "incarnation": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "resource",
+            "incarnation",
+            "generation"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "quiesce"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "requestAdmissionClosed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "requestAdmissionClosed"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        },
+        "deadlineMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "method": {
+          "const": "releaseInputs"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "object",
+              "properties": {
+                "instanceId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "profileId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "ownerEnvironmentId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "sessionId": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                },
+                "browserName": {
+                  "type": "string",
+                  "maxLength": 512,
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "instanceId",
+                "profileId"
+              ],
+              "additionalProperties": false
+            },
+            "incarnation": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "resource",
+            "incarnation"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "kind",
+        "requestId",
+        "deadlineMs",
+        "method",
+        "params"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

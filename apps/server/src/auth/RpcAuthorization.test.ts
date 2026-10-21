@@ -1,4 +1,6 @@
 import {
+  AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
   AuthFilesystemReadScope,
@@ -58,6 +60,48 @@ describe("RPC authorization scopes", () => {
     ]) {
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
     }
+  });
+
+  it("keeps shared browser grants and enrollments behind access scopes, so a paired client alone cannot widen who may drive it", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.managedBrowserAgentIdentity)).toBe(AuthAccessReadScope);
+    // Listing reveals who may reach a logged-in browser; creating or removing changes it.
+    expect(requiredScopeForRpcMethod(WS_METHODS.managedBrowserListGrants)).toBe(
+      AuthAccessReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.managedBrowserListEnrollments)).toBe(
+      AuthAccessReadScope,
+    );
+    for (const method of [
+      WS_METHODS.managedBrowserCreateGrant,
+      WS_METHODS.managedBrowserRevokeGrant,
+      WS_METHODS.managedBrowserEnroll,
+      WS_METHODS.managedBrowserRemoveEnrollment,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthAccessWriteScope);
+    }
+  });
+
+  it("lets a read-only client look at the shared browser but not open, share or update it", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.managedBrowserOverview)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.managedBrowserUpdateStatus)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.managedBrowserOpenTab)).toBe(
+      AuthPreviewOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.managedBrowserSetShared)).toBe(
+      AuthPreviewOperateScope,
+    );
+    // Taking or releasing control is driving the browser, so it needs the same scope as a person at its viewer.
+    expect(requiredScopeForRpcMethod(WS_METHODS.managedBrowserSetControl)).toBe(
+      AuthPreviewOperateScope,
+    );
+    // Switching the browser component is maintenance of the environment, whatever the action.
+    expect(requiredScopeForRpcMethod(WS_METHODS.managedBrowserUpdate)).toBe(
+      AuthEnvironmentMaintainScope,
+    );
   });
 
   it("allows relay status reads without granting relay installation access", () => {

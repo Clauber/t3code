@@ -1,0 +1,18 @@
+{
+  "component": "stealth-browser",
+  "protocolVersion": 1,
+  "engineCommit": "279bbe3ddfac11e140e3b66fb94448650e852b2b",
+  "generatedBy": "scripts/export-protocol.mjs from dist/managed/protocol.js",
+  "note": "Generated from the dirty release worktree with embedded open/attach endpoints. Source hashes identify that state; no release package verified for these updated schemas.",
+  "verifiedOn": "2026-10-17",
+  "sha256": {
+    "request.schema.json": "c17cc0da4fd1fdc61b0e5384d519669ca9b187e38e020d81c50cdde9b44f9e4f",
+    "response.schema.json": "0290a664b17acc084403e4b559572446d7606687b5bd06b6707d464d0c314259",
+    "event.schema.json": "9438bbf6c1eb24987145d4406d7c8b946d0f641d31a3130509bb73c8b88daf35",
+    "fixtures.json": "78192f49c2731c1f57e54de4b7ea7b56e029dd5aa6ce051d8f61b1182de5fb22"
+  },
+  "sourceSha256": {
+    "src/managed/protocol.ts": "a1129d649025ef25a5ffe4b66a109bdb68f37fb46a4b24ff46f0074abac07b82",
+    "src/managed/contracts.ts": "48ebdc9c88432312108da0114c2d30bd0e36cb0596c007ded26a65c646e5ac38"
+  }
+}

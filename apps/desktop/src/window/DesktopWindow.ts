@@ -26,6 +26,7 @@ import {
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import * as PreviewManager from "../preview/Manager.ts";
+import * as ExtensionHost from "../preview/extensions/ExtensionHost.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
@@ -581,6 +582,10 @@ export const make = Effect.gen(function* () {
           });
           menuTemplate.push({ type: "separator" });
         }
+
+        // Items extensions registered with chrome.contextMenus, for preview guests only.
+        const extensionItems = ExtensionHost.extensionContextMenu(contents, params);
+        if (extensionItems.length > 0) menuTemplate.push(...extensionItems, { type: "separator" });
 
         menuTemplate.push(
           { role: "cut", enabled: params.editFlags.canCut },

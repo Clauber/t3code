@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { createPreviewStreamClient, type PreviewStreamControl } from "./serverBrowserStream.ts";
+import {
+  createPreviewStreamClient,
+  previewStreamControlLabel,
+  type PreviewStreamControl,
+} from "./serverBrowserStream.ts";
 
 class FakeSocket extends EventTarget {
   static readonly OPEN = 1;
@@ -197,5 +201,132 @@ describe("preview stream agent pointer", () => {
       y: 50,
       sequence: 2,
     });
+  });
+});
+
+describe("managed browser stream: surface, held control and reconnect identity", () => {
+  beforeEach(() => vi.stubGlobal("WebSocket", FakeSocket));
+  afterEach(() => vi.unstubAllGlobals());
+  const connect = (events: Partial<Parameters<typeof createPreviewStreamClient>[1]> = {}) => {
+    const onControl = vi.fn();
+    const client = createPreviewStreamClient(target, {
+      onFrame: vi.fn(),
+      onControl,
+      onViewport: vi.fn(),
+      onConnectedChange: vi.fn(),
+      onUnauthorized: vi.fn(),
+      ...events,
+    });
+    return { client, socket: FakeSocket.current, onControl };
+  };
+  const base: PreviewStreamControl = {
+    canOperate: true,
+    controller: "agent",
+    generation: 1,
+    dialog: null,
+  };
+
+  it("reports which surface is shown and whether the whole window is on offer, with the reason", () => {
+    const onSurface = vi.fn();
+    const { socket } = connect({ onSurface });
+    socket.message(
+      JSON.stringify({
+        type: "surface",
+        current: "page",
+        window: { available: false, reason: "Full window view is turned off." },
+      }),
+    );
+    expect(onSurface).toHaveBeenLastCalledWith({
+      current: "page",
+      window: { available: false, reason: "Full window view is turned off." },
+    });
+    socket.message(
+      JSON.stringify({ type: "surface", current: "window", window: { available: true } }),
+    );
+    expect(onSurface).toHaveBeenLastCalledWith({ current: "window", window: { available: true } });
+  });
+
+  it("ignores a surface message that names neither surface", () => {
+    const onSurface = vi.fn();
+    const { socket } = connect({ onSurface });
+    socket.message(
+      JSON.stringify({ type: "surface", current: "desktop", window: { available: true } }),
+    );
+    socket.message(JSON.stringify({ type: "surface", current: "page", window: {} }));
+    expect(onSurface).not.toHaveBeenCalled();
+  });
+
+  it("lets a read-only viewer choose the surface it watches, and still nothing that acts", () => {
+    const { client, socket } = connect();
+    socket.control({ ...base, canOperate: false });
+    expect(client.send({ type: "surface", surface: "window" })).toBe(true);
+    expect(client.send({ type: "takeControl" })).toBe(false);
+    expect(client.send({ type: "text", text: "no" })).toBe(false);
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
+      { type: "surface", surface: "window" },
+    ]);
+    client.stop();
+  });
+
+  it("does not send a surface choice on a socket that is not open", () => {
+    const { client, socket } = connect();
+    socket.readyState = 3;
+    expect(client.send({ type: "surface", surface: "window" })).toBe(false);
+  });
+
+  it("lets a person resume control held for them, or take a paused browser, but not type until then", () => {
+    const { client, socket, onControl } = connect();
+    const held = { ...base, controller: "held-for-you" as const, holdExpiresAtMs: 9_000 };
+    socket.control(held);
+    expect(onControl).toHaveBeenLastCalledWith(held);
+    expect(client.send({ type: "text", text: "too early" })).toBe(false);
+    expect(client.send({ type: "takeControl" })).toBe(true);
+    socket.control({ ...base, controller: "paused" });
+    expect(client.send({ type: "text", text: "too early" })).toBe(false);
+    expect(client.send({ type: "takeControl" })).toBe(true);
+    client.stop();
+  });
+
+  it("refuses a hold with no end time, because a countdown needs one", () => {
+    const { socket, onControl } = connect();
+    socket.control({ ...base, controller: "another-viewer", holdExpiresAtMs: Number.NaN });
+    expect(onControl).toHaveBeenLastCalledWith({
+      ...base,
+      controller: "another-viewer",
+    });
+  });
+
+  it("names itself the same way across reconnects and differently from every other viewer", () => {
+    const first = connect();
+    const key = new URL(first.socket.url).searchParams.get("viewerKey");
+    expect(key).toMatch(/^[A-Za-z0-9_.-]{8,64}$/);
+    first.client.stop();
+    const second = connect();
+    expect(new URL(second.socket.url).searchParams.get("viewerKey")).not.toBe(key);
+    second.client.stop();
+  });
+
+  it("keeps the same viewer name when the connection drops and comes back", () => {
+    vi.useFakeTimers();
+    try {
+      const { client, socket } = connect();
+      const key = new URL(socket.url).searchParams.get("viewerKey");
+      socket.dispatchEvent(new Event("open"));
+      socket.dispatchEvent(Object.assign(new Event("close"), { code: 1006 }));
+      vi.advanceTimersByTime(60_000);
+      const reconnected = FakeSocket.current;
+      expect(reconnected).not.toBe(socket);
+      expect(new URL(reconnected.url).searchParams.get("viewerKey")).toBe(key);
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says plainly what a paused or held browser means", () => {
+    expect(previewStreamControlLabel({ ...base, controller: "paused" })).toBe("Paused");
+    expect(previewStreamControlLabel({ ...base, controller: "held-for-you" })).toBe(
+      "Your control is on hold",
+    );
   });
 });

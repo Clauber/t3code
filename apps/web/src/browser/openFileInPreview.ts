@@ -16,15 +16,9 @@ import * as Data from "effect/Data";
 import { AsyncResult } from "effect/reactivity";
 
 import { resolveAssetUrl } from "~/assets/assetUrls";
-import { isPreviewAvailableFor, previewRuntimeFor } from "~/browser/previewRuntime";
+import { isPreviewAvailableFor } from "~/browser/previewRuntime";
 import { applyPreviewServerSnapshot, rememberPreviewUrl } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
-
-import {
-  browserDefaultOpenProfileId,
-  browserDefaultOpenViewport,
-  resolveBrowserDefaults,
-} from "./browserDefaults";
 
 export const isBrowserPreviewFile = (path: string): boolean =>
   /\.(?:html?|pdf)$/i.test(path.split(/[?#]/, 1)[0] ?? "");
@@ -53,26 +47,8 @@ export async function openUrlInPreview<E>(input: {
   readonly url: string;
   readonly openPreview: OpenPreviewMutation<E>;
 }): Promise<AtomCommandResult<void, E | BrowserSettingsReadError>> {
-  const defaults = await resolveBrowserDefaults().catch(
-    (cause: unknown) => new BrowserSettingsReadError({ cause }),
-  );
-  if (defaults instanceof BrowserSettingsReadError) {
-    return AsyncResult.failure(Cause.fail(defaults));
-  }
-  const runtime = previewRuntimeFor(input.threadRef.environmentId);
-  const result = await input.openPreview({
-    environmentId: input.threadRef.environmentId,
-    input: {
-      threadId: input.threadRef.threadId,
-      url: input.url,
-      // Built here rather than via `openPreviewSession` because this path
-      // maps the result differently, so the configured defaults have to be
-      // applied explicitly or file/link opens would ignore them.
-      viewport: browserDefaultOpenViewport(defaults),
-      profileId: browserDefaultOpenProfileId(defaults),
-      ...(runtime === undefined ? {} : { runtime }),
-    },
-  });
+  const { openPreviewSession } = await import("~/components/preview/openPreviewSession");
+  const result = await openPreviewSession(input);
   return mapAtomCommandResult(result, (snapshot) => {
     applyPreviewServerSnapshot(input.threadRef, snapshot);
     rememberPreviewUrl(input.threadRef, input.url);

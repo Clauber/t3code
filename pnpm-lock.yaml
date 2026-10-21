@@ -236,6 +236,9 @@ importers:
       react-grab:
         specifier: ^0.1.32
         version: 0.1.44(react@19.2.6)
+      yauzl:
+        specifier: ^3.4.0
+        version: 3.4.0
     devDependencies:
       '@effect/vitest':
         specifier: 4.0.1
@@ -243,6 +246,9 @@ importers:
       '@types/node':
         specifier: 24.12.4
         version: 24.12.4
+      '@types/yauzl':
+        specifier: ^3.4.0
+        version: 3.4.0
       acorn:
         specifier: 8.16.0
         version: 8.16.0

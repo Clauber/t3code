@@ -5,6 +5,9 @@ import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
 
+import { readAgentIdentity } from "../browser/ManagedBrowserAgentIdentity.ts";
+import { browserAgentSessionId } from "./browserAgentIdentity.ts";
+import { setMcpProviderSession, clearMcpProviderSession } from "./McpProviderSession.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 
@@ -179,4 +182,81 @@ it.effect("does not keep credentials of other threads alive", () =>
 
     expect(yield* registry.resolve(token)).toBeUndefined();
   }),
+);
+
+it.effect("describes exact browser principals without extending their liveness", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeRegistry(() => timestamp);
+    const threadId = ThreadId.make("identity-expiry");
+    const issued = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["preview"]),
+    });
+    setMcpProviderSession(issued.config);
+    try {
+      const expected = browserAgentSessionId(environmentId, issued.config.providerSessionId);
+      expect(expected).toBe(
+        environmentId + String.fromCharCode(0) + issued.config.providerSessionId,
+      );
+      expect(yield* readAgentIdentity(threadId, registry)).toEqual({ agentSessionId: expected });
+      timestamp += 99;
+      expect(yield* registry.describe(issued.config.providerSessionId)).toBeDefined();
+      timestamp += 2;
+      expect(yield* registry.describe(issued.config.providerSessionId)).toBeUndefined();
+      expect(yield* readAgentIdentity(threadId, registry)).toEqual({ agentSessionId: null });
+    } finally {
+      clearMcpProviderSession(threadId);
+    }
+  }),
+);
+
+it.effect(
+  "browser identity follows the live injected slot and fails closed on revocation and mismatched scope",
+  () =>
+    Effect.gen(function* () {
+      const registry = yield* makeRegistry(() => 1_000);
+      const threadId = ThreadId.make("identity-rotation");
+      const issue = (preview = true) =>
+        registry.issue({
+          threadId,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          capabilities: new Set(preview ? ["preview"] : []),
+        });
+      expect(yield* readAgentIdentity(threadId, registry)).toEqual({ agentSessionId: null });
+      const first = yield* issue();
+      setMcpProviderSession(first.config);
+      try {
+        expect((yield* readAgentIdentity(threadId, registry)).agentSessionId).toBe(
+          browserAgentSessionId(environmentId, first.config.providerSessionId),
+        );
+        const second = yield* issue();
+        setMcpProviderSession(second.config);
+        yield* registry.revokeProviderSession(first.config.providerSessionId);
+        expect(yield* registry.describe(first.config.providerSessionId)).toBeUndefined();
+        expect((yield* readAgentIdentity(threadId, registry)).agentSessionId).toBe(
+          browserAgentSessionId(environmentId, second.config.providerSessionId),
+        );
+        for (const changed of [
+          { ...second.config, environmentId: EnvironmentId.make("wrong") },
+          { ...second.config, providerInstanceId: ProviderInstanceId.make("wrong") },
+          {
+            ...second.config,
+            providerSessionId: "provider-session:provider-instance:codex:shared",
+          },
+        ]) {
+          setMcpProviderSession(changed);
+          expect(yield* readAgentIdentity(threadId, registry)).toEqual({ agentSessionId: null });
+        }
+        const noPreview = yield* issue(false);
+        setMcpProviderSession(noPreview.config);
+        expect(yield* readAgentIdentity(threadId, registry)).toEqual({ agentSessionId: null });
+        setMcpProviderSession(second.config);
+        yield* registry.revokeThread(threadId);
+        expect(yield* readAgentIdentity(threadId, registry)).toEqual({ agentSessionId: null });
+      } finally {
+        clearMcpProviderSession(threadId);
+      }
+    }),
 );

@@ -96,3 +96,18 @@ export function resolveDiscoveredServerUrl(environmentId: EnvironmentId, rawUrl:
     return rawUrl;
   }
 }
+
+/** A discovered port belongs to the chat host, even when this Mac renders its browser. */
+export function resolveDiscoveredServerUrlForBrowser(environmentId: EnvironmentId, browserOwnerId: EnvironmentId, rawUrl: string): string {
+  const normalized = normalizePreviewUrl(rawUrl);
+  const parsed = new URL(normalized);
+  if (environmentId === browserOwnerId || !isLoopbackHost(parsed.hostname)) return normalized;
+  const environmentUrl = readEnvironmentUrl(environmentId);
+  if (isLocalLoopbackHost(environmentUrl.hostname)) {
+    throw new Error("This service runs on the chat's remote computer. Configure port forwarding or use its reachable private-network address; this Mac's localhost is a different computer.");
+  }
+  return resolveEnvironmentPortTarget(environmentId, {
+    kind: "environment-port", port: Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80)),
+    protocol: parsed.protocol === "https:" ? "https" : "http",
+  }, environmentUrl, rawUrl, parsed).resolvedUrl;
+}

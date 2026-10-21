@@ -185,6 +185,32 @@ export const authenticateMediaRequest = (requiredScope: AuthEnvironmentScope) =>
     return session;
   });
 
+/**
+ * Authenticates a raw route the way the API routes are: cookie or bearer session, then one required
+ * scope. Used by routes that answer with their own bodies; the failures are the standard
+ * auth/scope errors, which are respondable.
+ */
+export const authenticateRawRequest = (requiredScope: AuthEnvironmentScope) =>
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+    const session = yield* serverAuth.authenticateHttpRequest(request).pipe(
+      Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
+        failEnvironmentAuthInvalid(
+          EnvironmentAuth.serverAuthCredentialReason(error),
+          EnvironmentAuth.serverAuthDpopFailureReason(error),
+        ),
+      ),
+      Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
+        failEnvironmentInternal("internal_error", error),
+      ),
+    );
+    if (!session.scopes.includes(requiredScope)) {
+      return yield* failEnvironmentScopeRequired(requiredScope);
+    }
+    return session;
+  });
+
 export function failEnvironmentInternal(reason: EnvironmentInternalErrorReason, error?: unknown) {
   return Effect.gen(function* () {
     const traceId = yield* currentEnvironmentTraceId;

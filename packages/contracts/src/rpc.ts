@@ -25,7 +25,7 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
-import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   CodexAuthCallbackInput,
   CodexAuthCallbackState,
@@ -316,6 +316,32 @@ import {
   ProviderConsumeResetCreditResult,
 } from "./providerUsageLimits.ts";
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
+import {
+  ManagedBrowserControlError,
+  ManagedBrowserEnrollmentRemoveInput,
+  ManagedBrowserEnrollmentRemoveResult,
+  ManagedBrowserGrantRevokeInput,
+  ManagedBrowserGrantRevokeResult,
+  ManagedBrowserOpenTabInput,
+  ManagedBrowserAgentIdentity,
+  ManagedBrowserOpenTabResult,
+  ManagedBrowserOverview,
+  ManagedBrowserSetControlInput,
+  ManagedBrowserSetControlResult,
+  ManagedBrowserSetSharedInput,
+  ManagedBrowserSetSharedResult,
+  ManagedBrowserUpdateInput,
+  ManagedBrowserUpdateResult,
+  ManagedBrowserUpdateStatus,
+} from "./managedBrowserControls.ts";
+import {
+  ManagedBrowserEnrollment,
+  ManagedBrowserEnrollmentCreateInput,
+  ManagedBrowserEnrollmentList,
+  ManagedBrowserGrantCreateInput,
+  ManagedBrowserGrantCreateResult,
+  ManagedBrowserGrantList,
+} from "./managedBrowser.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
   ScheduledTaskDeleteInput,
@@ -504,6 +530,21 @@ export const WS_METHODS = {
   secretsAnswerRequest: "secrets.answerRequest",
   scheduledTasksListWebhookDeliveries: "scheduledTasks.listWebhookDeliveries",
   scheduledTasksGetWebhookDelivery: "scheduledTasks.getWebhookDelivery",
+
+  // Shared (managed) browser
+  managedBrowserOverview: "managedBrowser.overview",
+  managedBrowserAgentIdentity: "managedBrowser.agentIdentity",
+  managedBrowserOpenTab: "managedBrowser.openTab",
+  managedBrowserSetShared: "managedBrowser.setShared",
+  managedBrowserSetControl: "managedBrowser.setControl",
+  managedBrowserListGrants: "managedBrowser.listGrants",
+  managedBrowserCreateGrant: "managedBrowser.createGrant",
+  managedBrowserRevokeGrant: "managedBrowser.revokeGrant",
+  managedBrowserListEnrollments: "managedBrowser.listEnrollments",
+  managedBrowserEnroll: "managedBrowser.enroll",
+  managedBrowserRemoveEnrollment: "managedBrowser.removeEnrollment",
+  managedBrowserUpdateStatus: "managedBrowser.updateStatus",
+  managedBrowserUpdate: "managedBrowser.update",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1467,7 +1508,7 @@ const WsPreviewCloseRpc = Rpc.make(WS_METHODS.previewClose, {
 const WsPreviewListRpc = Rpc.make(WS_METHODS.previewList, {
   payload: PreviewListInput,
   success: PreviewListResult,
-  error: EnvironmentAuthorizationError,
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
 });
 
 const WsPreviewClearProfileRpc = Rpc.make(WS_METHODS.previewClearProfile, {
@@ -1747,6 +1788,89 @@ const WsScheduledTasksRotateWebhookTokenRpc = Rpc.make(
   },
 );
 
+const ManagedBrowserRpcError = Schema.Union([
+  ManagedBrowserControlError,
+  EnvironmentAuthorizationError,
+]);
+
+const WsManagedBrowserAgentIdentityRpc = Rpc.make(WS_METHODS.managedBrowserAgentIdentity, {
+  payload: Schema.Struct({ threadId: ThreadId }),
+  success: ManagedBrowserAgentIdentity,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsManagedBrowserOverviewRpc = Rpc.make(WS_METHODS.managedBrowserOverview, {
+  payload: Schema.Struct({}),
+  success: ManagedBrowserOverview,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserOpenTabRpc = Rpc.make(WS_METHODS.managedBrowserOpenTab, {
+  payload: ManagedBrowserOpenTabInput,
+  success: ManagedBrowserOpenTabResult,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserSetSharedRpc = Rpc.make(WS_METHODS.managedBrowserSetShared, {
+  payload: ManagedBrowserSetSharedInput,
+  success: ManagedBrowserSetSharedResult,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserSetControlRpc = Rpc.make(WS_METHODS.managedBrowserSetControl, {
+  payload: ManagedBrowserSetControlInput,
+  success: ManagedBrowserSetControlResult,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserListGrantsRpc = Rpc.make(WS_METHODS.managedBrowserListGrants, {
+  payload: Schema.Struct({}),
+  success: ManagedBrowserGrantList,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserCreateGrantRpc = Rpc.make(WS_METHODS.managedBrowserCreateGrant, {
+  payload: ManagedBrowserGrantCreateInput,
+  success: ManagedBrowserGrantCreateResult,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserRevokeGrantRpc = Rpc.make(WS_METHODS.managedBrowserRevokeGrant, {
+  payload: ManagedBrowserGrantRevokeInput,
+  success: ManagedBrowserGrantRevokeResult,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserListEnrollmentsRpc = Rpc.make(WS_METHODS.managedBrowserListEnrollments, {
+  payload: Schema.Struct({}),
+  success: ManagedBrowserEnrollmentList,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserEnrollRpc = Rpc.make(WS_METHODS.managedBrowserEnroll, {
+  payload: ManagedBrowserEnrollmentCreateInput,
+  success: ManagedBrowserEnrollment,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserRemoveEnrollmentRpc = Rpc.make(WS_METHODS.managedBrowserRemoveEnrollment, {
+  payload: ManagedBrowserEnrollmentRemoveInput,
+  success: ManagedBrowserEnrollmentRemoveResult,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserUpdateStatusRpc = Rpc.make(WS_METHODS.managedBrowserUpdateStatus, {
+  payload: Schema.Struct({}),
+  success: ManagedBrowserUpdateStatus,
+  error: ManagedBrowserRpcError,
+});
+
+const WsManagedBrowserUpdateRpc = Rpc.make(WS_METHODS.managedBrowserUpdate, {
+  payload: ManagedBrowserUpdateInput,
+  success: ManagedBrowserUpdateResult,
+  error: ManagedBrowserRpcError,
+});
+
 const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   payload: SecretRequestAnswerInput,
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
@@ -1857,6 +1981,19 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRunNowRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
+  WsManagedBrowserOverviewRpc,
+  WsManagedBrowserAgentIdentityRpc,
+  WsManagedBrowserOpenTabRpc,
+  WsManagedBrowserSetSharedRpc,
+  WsManagedBrowserSetControlRpc,
+  WsManagedBrowserListGrantsRpc,
+  WsManagedBrowserCreateGrantRpc,
+  WsManagedBrowserRevokeGrantRpc,
+  WsManagedBrowserListEnrollmentsRpc,
+  WsManagedBrowserEnrollRpc,
+  WsManagedBrowserRemoveEnrollmentRpc,
+  WsManagedBrowserUpdateStatusRpc,
+  WsManagedBrowserUpdateRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

@@ -1,7 +1,10 @@
 import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput } from "./git.ts";
 import {
+  AuthAccessWriteScope,
+  AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
+  AuthPreviewOperateScope,
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
 } from "./auth.ts";
@@ -39,6 +42,17 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.scheduledTasksDelete]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRunNow]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksRotateWebhookToken]: AuthOrchestrationOperateScope,
+
+  // Shared browser: tabs are preview actions; who may watch or drive is access; updating
+  // the browser component is maintenance of the environment.
+  [WS_METHODS.managedBrowserOpenTab]: AuthPreviewOperateScope,
+  [WS_METHODS.managedBrowserSetShared]: AuthPreviewOperateScope,
+  [WS_METHODS.managedBrowserSetControl]: AuthPreviewOperateScope,
+  [WS_METHODS.managedBrowserCreateGrant]: AuthAccessWriteScope,
+  [WS_METHODS.managedBrowserRevokeGrant]: AuthAccessWriteScope,
+  [WS_METHODS.managedBrowserEnroll]: AuthAccessWriteScope,
+  [WS_METHODS.managedBrowserRemoveEnrollment]: AuthAccessWriteScope,
+  [WS_METHODS.managedBrowserUpdate]: AuthEnvironmentMaintainScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

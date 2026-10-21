@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { createCdpRelayConnection, type CdpRelayTarget } from "./CdpRelay.ts";
+import {
+  createCdpRelayConnection,
+  createMainWorldScriptInstaller,
+  type CdpRelayTarget,
+} from "./CdpRelay.ts";
 
 const makeTarget = (
   send: CdpRelayTarget["send"],
@@ -192,5 +196,50 @@ describe("CDP relay downloads", () => {
     expect(written).toEqual([
       { method: "Browser.downloadWillBegin", params: { guid: "g1", suggestedFilename: "r.csv" } },
     ]);
+  });
+});
+
+describe("managed main-world registration", () => {
+  it("replaces the owned registration across relay reconnects and serializes replacements", async () => {
+    const registrations = new Map<string, unknown>();
+    let sequence = 0;
+    const send: CdpRelayTarget["send"] = async (method, params) => {
+      if (method === "Page.addScriptToEvaluateOnNewDocument") {
+        const identifier = String(++sequence);
+        registrations.set(identifier, params.source);
+        return { identifier };
+      }
+      if (method === "Page.removeScriptToEvaluateOnNewDocument")
+        registrations.delete(String(params.identifier));
+      return {};
+    };
+    const installMainWorldScript = createMainWorldScriptInstaller(send);
+    const target = { ...makeTarget(send), installMainWorldScript };
+    for (let i = 0; i < 3; i++) {
+      await new Promise<void>((resolve) => {
+        const relay = createCdpRelayConnection(target, (raw) => {
+          expect(JSON.parse(raw).error).toBeUndefined();
+          resolve();
+        });
+        relay.receive(
+          JSON.stringify({
+            id: 1,
+            sessionId: "t3-preview-page",
+            method: "T3.installMainWorldScript",
+            params: { source: `script${i}` },
+          }),
+        );
+      });
+      expect(registrations.size).toBe(1);
+    }
+    await Promise.all([installMainWorldScript("four"), installMainWorldScript("five")]);
+    expect([...registrations.values()]).toEqual(["five"]);
+  });
+
+  it("refuses a failed current-document installation", async () => {
+    const install = createMainWorldScriptInstaller(async (method) =>
+      method === "Runtime.evaluate" ? { exceptionDetails: {} } : { identifier: "1" },
+    );
+    await expect(install("bad script")).rejects.toThrow("failed in the current document");
   });
 });

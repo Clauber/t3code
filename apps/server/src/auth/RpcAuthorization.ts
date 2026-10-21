@@ -112,6 +112,12 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.scheduledTasksList]: AuthOrchestrationReadScope,
   [WS_METHODS.scheduledTasksSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.secretsAnswerRequest]: AuthOrchestrationOperateScope,
+  // Reads of the shared browser. Grants and enrollments list who may reach it, so they need access:read.
+  [WS_METHODS.managedBrowserOverview]: AuthOrchestrationReadScope,
+  [WS_METHODS.managedBrowserUpdateStatus]: AuthOrchestrationReadScope,
+  [WS_METHODS.managedBrowserListGrants]: AuthAccessReadScope,
+  [WS_METHODS.managedBrowserAgentIdentity]: AuthAccessReadScope,
+  [WS_METHODS.managedBrowserListEnrollments]: AuthAccessReadScope,
   // Delivery logs hold request bodies, so they need the same scope as the URL.
   [WS_METHODS.scheduledTasksListWebhookDeliveries]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksGetWebhookDelivery]: AuthOrchestrationOperateScope,

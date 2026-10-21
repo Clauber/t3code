@@ -4,23 +4,28 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 
-import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
+import { resolveDiscoveredServerUrlForBrowser } from "~/browser/browserTargetResolver";
 import type { BrowserSettingsReadError, OpenPreviewMutation } from "~/browser/openFileInPreview";
 import { recordVisitForThread } from "~/browserHistoryStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { openPreviewSession } from "./openPreviewSession";
-import { previewRuntimeFor } from "~/browser/previewRuntime";
+import { isElectron } from "~/env";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 
 export async function openDiscoveredPort<E>(input: {
   readonly threadRef: ScopedThreadRef;
   readonly port: DiscoveredLocalServer;
   readonly openPreview: OpenPreviewMutation<E>;
 }): Promise<AtomCommandResult<void, E | BrowserSettingsReadError>> {
-  // A server tab runs on the environment, where loopback is already right.
-  const resolvedUrl =
-    previewRuntimeFor(input.threadRef.environmentId) === "server"
-      ? input.port.url
-      : resolveDiscoveredServerUrl(input.threadRef.environmentId, input.port.url);
+  const owner = isElectron
+    ? appAtomRegistry.get(primaryEnvironmentIdAtom)
+    : input.threadRef.environmentId;
+  const resolvedUrl = resolveDiscoveredServerUrlForBrowser(
+    input.threadRef.environmentId,
+    owner ?? input.threadRef.environmentId,
+    input.port.url,
+  );
   const result = await openPreviewSession({
     openPreview: input.openPreview,
     threadRef: input.threadRef,

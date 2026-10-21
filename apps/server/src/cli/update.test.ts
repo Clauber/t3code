@@ -1,17 +1,27 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
+import { FetchHttpClient } from "effect/http";
 import * as FileSystem from "effect/FileSystem";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import {
+  HostProcessArchitecture,
   HostProcessEnvironment,
   HostProcessInvokedAs,
+  HostProcessIsExecutable,
   HostProcessPlatform,
   HostProcessWorkingDirectory,
 } from "@t3tools/shared/hostProcess";
 
-import { repointLauncher, resolveLauncherPath } from "./update.ts";
+import { hostingMarkerPath, publishHostingMarker } from "../browser/managedBrowserMaintenance.ts";
+import { pinnedRuntimePaths } from "../cloud/pinnedRuntime.ts";
+import * as BootService from "../cloud/bootService.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import { repointLauncher, resolveLauncherPath, runUpdate } from "./update.ts";
 
 it.layer(NodeServices.layer)("t3 update launcher", (it) => {
   it.effect("repoints a symlink that lives in a runtime versions tree", () =>
@@ -105,5 +115,121 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       assert.equal(relative, launcher);
       assert.equal(absent, undefined);
     }).pipe(Effect.scoped, Effect.provideService(HostProcessPlatform, "linux")),
+  );
+});
+
+/**
+ * `t3 update` runs in its own process and has no way to close the running server's admission, so a server
+ * that hosts managed browsers is never restarted by it. These run the command's body end to end with the
+ * service, the runner and the downloaded runtime faked at their edges, and look at whether the service
+ * is told to restart.
+ */
+it.layer(NodeServices.layer)("t3 update and a server hosting managed browsers", (it) => {
+  const TARGET = "9.9.9";
+
+  const run = (
+    withMarker: "none" | "before" | "during" | "malformed" | "unreadable",
+    assumeYes = true,
+  ) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-hosting-" });
+      const baseDir = path.join(root, "home");
+      const stateDir = path.join(baseDir, "userdata");
+      yield* fs.makeDirectory(stateDir, { recursive: true });
+      // The target runtime is already on disk, so nothing is downloaded.
+      const paths = pinnedRuntimePaths(path, baseDir, TARGET, "linux");
+      yield* fs.makeDirectory(path.dirname(paths.entryPath), { recursive: true });
+      yield* fs.writeFileString(paths.entryPath, "");
+      yield* fs.writeFileString(paths.sentinelPath, TARGET);
+      const marker = hostingMarkerPath(stateDir);
+      const scope = yield* Scope.make();
+      const host = publishHostingMarker(marker).pipe(Scope.provide(scope));
+      if (withMarker === "before") yield* host;
+      // A marker that exists but cannot be understood is not an absent one.
+      if (withMarker === "malformed" || withMarker === "unreadable") {
+        yield* fs.makeDirectory(path.dirname(marker), { recursive: true });
+        if (withMarker === "malformed") yield* fs.writeFileString(marker, "{ not json");
+        else yield* fs.makeDirectory(marker);
+      }
+
+      const installs: Array<{ readonly start: boolean | undefined }> = [];
+      const service = BootService.BootService.of({
+        install: (options) =>
+          Effect.sync(() => {
+            installs.push({ start: options?.start });
+            return {} as never;
+          }),
+        restart: Effect.succeed(true),
+        uninstall: Effect.succeed(true),
+        status: Effect.succeed({
+          supported: true,
+          installed: true,
+          installedBaseDir: baseDir,
+          installedVersion: "1.0.0",
+          current: false,
+          problems: [],
+        } as never),
+      });
+      const runner = ProcessRunner.ProcessRunner.of({
+        run: () =>
+          // The runtime's own `--version` check: the moment a download would have finished.
+          (withMarker === "during" ? host : Effect.void).pipe(
+            Effect.as({ code: 0, stdout: `t3 v${TARGET}`, stderr: "" } as never),
+          ),
+      } as never);
+
+      yield* runUpdate({
+        baseDir,
+        logsDir: path.join(baseDir, "logs"),
+        serverRuntimeStatePath: path.join(stateDir, "server-runtime.json"),
+        channel: undefined,
+        requestedVersion: TARGET,
+        allowDowngrade: false,
+        assumeYes,
+        bootService: () => Layer.succeed(BootService.BootService, service),
+      }).pipe(
+        Effect.provideService(BootService.BootService, service),
+        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(HostProcessPlatform, "linux"),
+        Effect.provideService(HostProcessArchitecture, "x64"),
+        Effect.provideService(HostProcessEnvironment, {}),
+        Effect.provideService(HostProcessInvokedAs, "t3"),
+        Effect.provideService(HostProcessIsExecutable, false),
+        Effect.provideService(HostProcessWorkingDirectory, root),
+      );
+      yield* Scope.close(scope, Exit.void);
+      return installs;
+    }).pipe(Effect.scoped);
+
+  it.effect("with nothing hosted, restarts the service as asked", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(yield* run("none"), [{ start: true }]);
+    }),
+  );
+
+  it.effect(
+    "points the service at the new version but does not restart one that hosts browsers",
+    () =>
+      Effect.gen(function* () {
+        assert.deepStrictEqual(yield* run("before"), [{ start: false }]);
+      }),
+  );
+
+  it.effect("also declines when the marker exists but is malformed or unreadable", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual(yield* run("malformed"), [{ start: false }]);
+      assert.deepStrictEqual(yield* run("unreadable"), [{ start: false }]);
+    }),
+  );
+
+  it.effect(
+    "also declines when browsers start hosting while the new version was being prepared",
+    () =>
+      Effect.gen(function* () {
+        assert.deepStrictEqual(yield* run("during"), [{ start: false }]);
+      }),
   );
 });

@@ -52,6 +52,8 @@ interface Props {
   /** False until the tab can take these actions, such as before its page attaches. */
   enabled: boolean;
   actions: PreviewMoreMenuActions;
+  browserKind: "managed" | "standard";
+  onSwitchBrowser: () => void;
   /** Current zoom factor as a number (1.0 = 100%). */
   zoomFactor: number;
   /** Emulated `prefers-color-scheme` for the page. */
@@ -85,6 +87,8 @@ const MenuTriggerButton = () => (
 export function PreviewMoreMenu({
   enabled,
   actions,
+  browserKind,
+  onSwitchBrowser,
   zoomFactor,
   colorScheme,
   deviceToolbarVisible,
@@ -98,6 +102,15 @@ export function PreviewMoreMenu({
     <Menu>
       <MenuTriggerButton />
       <MenuPopup align="end" sideOffset={6}>
+        <MenuGroup>
+          <MenuGroupLabel>
+            {browserKind === "managed" ? "Stealth Browse" : "Standard preview"}
+          </MenuGroupLabel>
+          <MenuItem onClick={onSwitchBrowser}>
+            {browserKind === "managed" ? "Open standard preview" : "Open Stealth Browse on this Mac"}
+          </MenuItem>
+        </MenuGroup>
+        <MenuSeparator />
         <MenuItem onClick={actions.hardReload} disabled={disabled}>
           Hard reload
         </MenuItem>

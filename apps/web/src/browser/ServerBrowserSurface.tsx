@@ -3,10 +3,10 @@
 import {
   createPreviewFramePainter,
   createPreviewStreamClient,
-  previewStreamControlLabel,
   previewStreamModifiers,
   type PreviewStreamClient,
   type PreviewStreamControl,
+  type PreviewStreamSurface,
   type PreviewStreamDownload,
   type PreviewStreamFileChooser,
   uploadPreviewStreamFiles,
@@ -34,6 +34,8 @@ import {
   useState,
 } from "react";
 
+import { ServerBrowserControlBar } from "~/browser/ServerBrowserControlBar";
+import { windowViewerKey } from "~/browser/viewerKey";
 import { AgentCursorMark } from "~/components/preview/AgentBrowserCursor";
 import { CommandBlock } from "~/components/CommandBlock";
 import { Button } from "~/components/ui/button";
@@ -179,6 +181,9 @@ export function ServerBrowserSurface(props: {
   const hasFrameRef = useRef(false);
   const controlRef = useRef<PreviewStreamControl | null>(null);
   const [control, setControl] = useState<PreviewStreamControl | null>(null);
+  // Only a shared (managed) browser reports its surface; ordinary tabs keep their existing control row.
+  const [surface, setSurface] = useState<PreviewStreamSurface | null>(null);
+  const surfaceRef = useRef<PreviewStreamSurface | null>(null);
   const [promptText, setPromptText] = useState("");
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
   const [agentCursor, setAgentCursor] = useState<AgentCursorPlacement | null>(null);
@@ -372,7 +377,14 @@ export function ServerBrowserSurface(props: {
       firstFrame();
     });
     const client = createPreviewStreamClient(
-      { access, threadId, tabId, maxWidth: cap.width, maxHeight: cap.height },
+      {
+        access,
+        threadId,
+        tabId,
+        maxWidth: cap.width,
+        maxHeight: cap.height,
+        viewerKey: windowViewerKey(),
+      },
       {
         onFrame: (jpeg) => {
           unauthorizedRef.current = 0;
@@ -402,6 +414,13 @@ export function ServerBrowserSurface(props: {
           viewportRef.current = viewport;
           viewportChanged(viewport);
         },
+        onSurface: (next) => {
+          // A new surface has its own coordinate space; the next frame reports it. Announcing the same one
+          // again (after a refused switch) must not forget the space already known.
+          if (surfaceRef.current?.current !== next.current) viewportRef.current = null;
+          surfaceRef.current = next;
+          setSurface(next);
+        },
         onControl: (next) => {
           const previous = controlRef.current;
           controlRef.current = next;
@@ -416,7 +435,9 @@ export function ServerBrowserSurface(props: {
             clearInput();
           } else if (previous?.controller !== "you") {
             const size = sizeRef.current;
-            if (followSize && size) client.send({ type: "resize", ...size });
+            if (followSize && size && surfaceRef.current?.current !== "window") {
+              client.send({ type: "resize", ...size });
+            }
           }
         },
         onConnectedChange: (connected) => {
@@ -722,28 +743,12 @@ export function ServerBrowserSurface(props: {
       className={cn("relative flex flex-col overflow-hidden", className)}
       data-server-browser-surface={tabId}
     >
-      <div
-        className={cn(
-          "visible relative z-20 flex shrink-0 items-center justify-between gap-2 border-border bg-background px-2 py-1",
-          controlPosition === "bottom" ? "order-last border-t" : "border-b",
-        )}
-      >
-        <span role="status" className="text-xs text-muted-foreground">
-          {previewStreamControlLabel(control)}
-        </span>
-        {control?.canOperate ? (
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={control.controller === "another-viewer"}
-            onClick={() =>
-              send({ type: control.controller === "you" ? "releaseControl" : "takeControl" })
-            }
-          >
-            {control.controller === "you" ? "Release control" : "Take control"}
-          </Button>
-        ) : null}
-      </div>
+      <ServerBrowserControlBar
+        control={control}
+        surface={surface}
+        position={controlPosition}
+        send={send}
+      />
       <div className="relative min-h-0 flex-1">
         <canvas
           ref={canvasRef}

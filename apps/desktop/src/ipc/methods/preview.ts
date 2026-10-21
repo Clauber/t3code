@@ -304,9 +304,9 @@ export const getPreviewConfig = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_GET_CONFIG_CHANNEL,
   payload: DesktopPreviewConfigInputSchema,
   result: DesktopPreviewWebviewConfigSchema,
-  handler: Effect.fn("desktop.ipc.preview.getConfig")(function* ({ environmentId, profileId }) {
+  handler: Effect.fn("desktop.ipc.preview.getConfig")(function* ({ environmentId, profileId, managedProfileId }) {
     const manager = yield* PreviewManager.PreviewManager;
-    const { scope, persistent, namespace } = resolvePartitionScope(environmentId, profileId);
+    const { scope, persistent, namespace } = managedProfileId === undefined ? resolvePartitionScope(environmentId, profileId) : { scope: yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String])))([environmentId, managedProfileId]), persistent: true, namespace: "managed" as const };
     // Creating the session first is what installs the UA rewrite and permission
     // handlers; a guest that attached to an untouched partition would run with
     // Electron's default UA and Chromium's default permission behaviour.

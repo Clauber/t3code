@@ -18,6 +18,8 @@ export interface CdpRelayTarget {
   ) => Promise<unknown>;
   /** The page's own CDP target id; Playwright keys the main frame by it. */
   readonly targetId: () => Promise<string>;
+  readonly installMainWorldScript?: (source: string) => Promise<void>;
+  readonly configureManagedProxy?: (proxy: string | null) => Promise<void>;
   readonly url: () => string;
   readonly title: () => string;
   readonly userAgent: () => string;
@@ -158,6 +160,30 @@ export function createCdpRelayConnection(
   };
 
   const pageCommand = (command: CdpCommand): Promise<unknown> => {
+    if (command.method === "T3.configureManagedProxy") {
+      const proxy = command.params?.["proxy"];
+      if (
+        sessions.get(command.sessionId!) !== "page" ||
+        (proxy !== null && typeof proxy !== "string") ||
+        !target.configureManagedProxy
+      )
+        return Promise.reject(
+          new Error("Proxy configuration requires this managed tab’s scoped session."),
+        );
+      return target.configureManagedProxy(proxy);
+    }
+    if (command.method === "T3.installMainWorldScript") {
+      const source = command.params?.["source"];
+      if (
+        sessions.get(command.sessionId!) !== "page" ||
+        typeof source !== "string" ||
+        !target.installMainWorldScript
+      )
+        return Promise.reject(
+          new Error("Main-world installation requires this tab’s scoped installer."),
+        );
+      return target.installMainWorldScript(source);
+    }
     const child = sessions.get(command.sessionId!) === "page" ? undefined : command.sessionId;
     // The page itself is already running, but its child frames are not:
     // Playwright auto-attaches with waitForDebuggerOnStart, so Chromium pauses
@@ -220,5 +246,33 @@ export function createCdpRelayConnection(
       for (const [id, kind] of sessions)
         if (kind === "page") send({ method, params, sessionId: id });
     },
+  };
+}
+
+/** One registration per debugger lifetime, including engine reconnects and restarts. */
+export function createMainWorldScriptInstaller(send: CdpRelayTarget["send"]) {
+  let identifier: string | undefined;
+  let pending = Promise.resolve();
+  return (source: string): Promise<void> => {
+    const install = pending.then(async () => {
+      if (identifier !== undefined) {
+        await send("Page.removeScriptToEvaluateOnNewDocument", { identifier }, undefined);
+        identifier = undefined;
+      }
+      const result = await send("Page.addScriptToEvaluateOnNewDocument", { source }, undefined);
+      if (
+        typeof result !== "object" ||
+        result === null ||
+        !("identifier" in result) ||
+        typeof result.identifier !== "string"
+      )
+        throw new Error("The debugger did not register the main-world script.");
+      identifier = result.identifier;
+      const evaluated = await send("Runtime.evaluate", { expression: source }, undefined);
+      if (typeof evaluated === "object" && evaluated !== null && "exceptionDetails" in evaluated)
+        throw new Error("The main-world script failed in the current document.");
+    });
+    pending = install.catch(() => {});
+    return install;
   };
 }

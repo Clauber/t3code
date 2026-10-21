@@ -69,6 +69,7 @@ import {
   setSnapShotShortcutSuppressed,
 } from "./methods/snapShot.ts";
 import * as PreviewIpc from "./methods/preview.ts";
+import * as PreviewExtensionsIpc from "./methods/previewExtensions.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import {
   completeLegacyLocalStorage,
@@ -162,4 +163,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   }
   yield* ipc.handle(PreviewIpc.listBrowserImportSources);
   yield* ipc.handle(PreviewIpc.importBrowserCookies);
+  yield* ipc.handle(PreviewExtensionsIpc.listExtensions);
+  yield* ipc.handle(PreviewExtensionsIpc.prepareExtensionInstall);
+  yield* ipc.handle(PreviewExtensionsIpc.commitExtensionInstall);
+  yield* ipc.handle(PreviewExtensionsIpc.discardExtensionInstall);
+  yield* ipc.handle(PreviewExtensionsIpc.uninstallExtension);
+  yield* ipc.handle(PreviewExtensionsIpc.openExtensionPopup);
 });

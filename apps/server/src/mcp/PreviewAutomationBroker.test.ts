@@ -1494,3 +1494,37 @@ it.effect("keeps the host connected when a background status read times out", ()
     }),
   ),
 );
+
+it.effect(
+  "tells the host which environment the calling agent runs in, from authenticated scope",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* makeBroker;
+        const seen: Array<PreviewAutomationRequest["callerEnvironmentId"]> = [];
+        const requests = requestsFrom(yield* broker.connect(makeHost()));
+        yield* Stream.runForEach(requests, (request) =>
+          Effect.sync(() => seen.push(request.callerEnvironmentId)).pipe(
+            Effect.andThen(
+              broker.respond({
+                clientId: "client-1",
+                connectionId: request.connectionId,
+                requestId: request.requestId,
+                ok: true,
+                result: "ok",
+              }),
+            ),
+          ),
+        ).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+
+        // Tool input cannot name it: it is the scope's, so a managed browser can authorize the caller.
+        yield* broker.invoke({
+          scope,
+          operation: "status",
+          input: { callerEnvironmentId: "environment-forged" },
+        });
+        expect(seen).toEqual([scope.environmentId]);
+      }),
+    ),
+);

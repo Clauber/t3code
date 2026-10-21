@@ -47,13 +47,14 @@ export const loadPreviewWebviewConfig = (
   environmentId: EnvironmentId,
   profileId?: string,
   bridge: PreviewConfigBridge | null = previewBridge,
+  managedProfileId?: string,
 ): Effect.Effect<DesktopPreviewWebviewConfig, PreviewWebviewConfigError> => {
   if (bridge === null) {
     return Effect.fail(new PreviewWebviewBridgeUnavailableError({ environmentId }));
   }
 
   return Effect.tryPromise({
-    try: () => bridge.getPreviewConfig(environmentId, profileId),
+    try: () => bridge.getPreviewConfig(environmentId, profileId, managedProfileId),
     catch: (cause) => new PreviewWebviewConfigLoadError({ environmentId, cause }),
   });
 };
@@ -84,8 +85,16 @@ const parseConfigKey = (key: string): { environmentId: EnvironmentId; profileId?
 };
 
 const previewWebviewConfigAtom = Atom.family((key: string) => {
-  const { environmentId, profileId } = parseConfigKey(key);
-  return Atom.make(loadPreviewWebviewConfig(environmentId, profileId)).pipe(
+  const [base, managedProfileId] = JSON.parse(key) as [string, string | null];
+  const { environmentId, profileId } = parseConfigKey(base);
+  return Atom.make(
+    loadPreviewWebviewConfig(
+      environmentId,
+      profileId,
+      previewBridge,
+      managedProfileId ?? undefined,
+    ),
+  ).pipe(
     Atom.swr({
       staleTime: PREVIEW_CONFIG_STALE_TIME_MS,
       revalidateOnMount: true,
@@ -98,7 +107,12 @@ const previewWebviewConfigAtom = Atom.family((key: string) => {
 export function usePreviewWebviewConfig(
   environmentId: EnvironmentId,
   profileId?: string,
+  managedProfileId?: string,
 ): DesktopPreviewWebviewConfig | null {
-  const result = useAtomValue(previewWebviewConfigAtom(configKey(environmentId, profileId)));
+  const result = useAtomValue(
+    previewWebviewConfigAtom(
+      JSON.stringify([configKey(environmentId, profileId), managedProfileId ?? null]),
+    ),
+  );
   return Option.getOrNull(AsyncResult.value(result));
 }

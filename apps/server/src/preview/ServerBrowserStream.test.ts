@@ -145,12 +145,121 @@ it.effect.each([
         maxHeight: 800,
         quality: 70,
         canOperate,
+        // Who is watching travels with the request, so a managed tab can be shown only to a session
+        // a grant names; operate scope alone does not make a session an administrator.
+        viewer: { sessionId: "stream-test", administrator: false },
       },
     ]);
     // In particular, a one-use ticket must never be authenticated a second
     // time to discover whether this read session also has operate scope.
     expect(auth.requests).toEqual([resource]);
   }).pipe(Effect.scoped),
+);
+
+const Acquire = (url: string) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const socket = new WebSocket(url);
+      socket.binaryType = "arraybuffer";
+      return socket;
+    }),
+    (socket) => Effect.sync(() => socket.close()),
+  );
+
+it.effect(
+  "lets a read-only viewer choose what it watches and name itself, but forwards nothing it could act with",
+  () =>
+    Effect.gen(function* () {
+      const auth = makeAuth([AuthOrchestrationReadScope]);
+      const inputs: unknown[] = [];
+      const attachments: Parameters<ServerBrowser.ServerBrowser["Service"]["attachViewer"]>[0][] =
+        [];
+      const acked = Promise.withResolvers<void>();
+      const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
+      yield* Queue.offer(output, {
+        _tag: "surface",
+        current: "page",
+        window: { available: false, reason: "Full window view is turned off." },
+      });
+      yield* Queue.offer(output, {
+        _tag: "control",
+        canOperate: false,
+        controller: "paused",
+        generation: 3,
+        holdExpiresAtMs: 1234,
+        dialog: null,
+      });
+      yield* Queue.offer(output, {
+        _tag: "frame",
+        data: new Uint8Array([255, 216, 255, 217]),
+        ack: Effect.sync(() => acked.resolve()),
+      });
+      const browser = ServerBrowser.ServerBrowser.of({
+        clearProfile: () => Effect.void,
+        openDownload: () => Effect.succeedNone,
+        answerFileChooser: () => Effect.succeed(false),
+        attachViewer: (input) =>
+          Effect.sync(() => {
+            attachments.push(input);
+            return { output, input: (message) => Effect.sync(() => void inputs.push(message)) };
+          }),
+      });
+      const services = yield* Layer.build(
+        HttpRouter.serve(
+          routeLayer.pipe(
+            Layer.provide(Layer.succeed(ServerBrowser.ServerBrowser, browser)),
+            Layer.provide(platformLayer),
+          ),
+          { disableListenLog: true },
+        ).pipe(Layer.provideMerge(NodeHttpServer.layerTest), Layer.provide(auth.layer)),
+      );
+      const server = Context.get(services, HttpServer.HttpServer);
+      const origin = HttpServer.formatAddress(server.address).replace(/^http/, "ws");
+      const socket = yield* Acquire(
+        `${origin}/api/preview-stream/ws?threadId=thread&tabId=tab&viewerKey=laptop-1&wsTicket=t`,
+      );
+      const texts: Array<Record<string, unknown>> = [];
+      const ready = Promise.withResolvers<void>();
+      socket.addEventListener("message", (event) => {
+        if (typeof event.data === "string") {
+          texts.push(JSON.parse(event.data));
+          return;
+        }
+        for (const message of [
+          { type: "surface", surface: "window" },
+          { type: "takeControl" },
+          { type: "mouse", action: "down", x: 1, y: 1, button: "left" },
+          { type: "text", text: "no" },
+        ]) {
+          socket.send(JSON.stringify(message));
+        }
+        socket.send(JSON.stringify({ type: "ack" }));
+        ready.resolve();
+      });
+      yield* Effect.promise(() => ready.promise);
+      yield* Effect.promise(() => acked.promise);
+      // A viewer that only watches may change what it watches; nothing that acts reached the browser.
+      expect(inputs).toEqual([{ type: "surface", surface: "window" }]);
+      expect(attachments[0]?.viewerKey).toBe("laptop-1");
+      // The surface offer and the paused state, with the end of the hold, reach the client as sent.
+      expect(texts).toEqual([
+        {
+          type: "surface",
+          current: "page",
+          window: { available: false, reason: "Full window view is turned off." },
+        },
+        {
+          type: "control",
+          canOperate: false,
+          controller: "paused",
+          generation: 3,
+          holdExpiresAtMs: 1234,
+          dialog: null,
+        },
+      ]);
+      expect(auth.requests.length).toBe(1);
+    }).pipe(Effect.scoped),
+  15_000,
 );
 
 it.effect.each([

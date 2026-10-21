@@ -6,6 +6,7 @@ import {
   ThreadId,
   type PreviewSessionSnapshot,
 } from "@t3tools/contracts";
+import { managedStreamTarget } from "@t3tools/client-runtime/managed-browser";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, Platform, TextInput, View } from "react-native";
@@ -88,6 +89,8 @@ function BrowserPreviewScreen({
   const { tabs, loaded } = useThreadServerBrowserTabs({ environmentId, threadId, enabled: true });
   const tab = tabs.find((entry) => entry.tabId === selectedTabId) ?? latestBrowserTab(tabs);
   const tabId = tab?.tabId ?? null;
+  // A shared browser another environment owns is watched on its owner, over this device's own connection to it.
+  const stream = tab ? managedStreamTarget(tab, environmentId) : null;
   // Pin the fallback so another tab's activity does not switch the view.
   if (tabId !== null && tabId !== selectedTabId) {
     setPictureInPicture(NO_PICTURE_IN_PICTURE);
@@ -179,9 +182,9 @@ function BrowserPreviewScreen({
           {live ? (
             <PreviewStreamWebView
               key={tab.tabId}
-              environmentId={environmentId}
-              threadId={threadId}
-              tabId={tab.tabId}
+              environmentId={stream?.environmentId ?? environmentId}
+              threadId={stream?.threadId ?? threadId}
+              tabId={stream?.tabId ?? tab.tabId}
               ref={streamRef}
               interactive
               background={themeVariables["--color-sheet-solid"]}

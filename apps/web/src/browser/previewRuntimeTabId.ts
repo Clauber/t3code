@@ -9,7 +9,15 @@ export function previewRuntimeTabId(
   threadRef: ScopedThreadRef,
   serverEpoch: string | null,
   tabId: string,
+  managed?: import("@t3tools/contracts").PreviewManagedSession,
 ): string {
+  if (managed?.native)
+    return JSON.stringify([
+      managed.ownerEnvironmentId,
+      managed.instanceId,
+      managed.profileId,
+      managed.engineTabId,
+    ]);
   return JSON.stringify([threadRef.environmentId, threadRef.threadId, serverEpoch, tabId]);
 }
 

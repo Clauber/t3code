@@ -9,6 +9,8 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
+import * as ExtensionHost from "./extensions/ExtensionHost.ts";
+
 const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
 /**
  * Incognito partitions deliberately omit the `persist:` prefix, which is what
@@ -19,7 +21,7 @@ const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
 const PREVIEW_EPHEMERAL_PARTITION_PREFIX = "t3code-preview-ephemeral-";
 const PROFILE_PARTITION_MARKER = "profile-";
 
-export type BrowserSessionPartitionNamespace = "profile";
+export type BrowserSessionPartitionNamespace = "profile" | "managed";
 
 // Permissions granted to preview web content. `clipboard-sanitized-write` is the
 // Electron permission behind `navigator.clipboard.writeText()` — note it is NOT
@@ -163,6 +165,7 @@ const encodeScopeForDigest = (scope: string): Uint8Array =>
 export const make = Effect.gen(function* BrowserSessionMake() {
   const crypto = yield* Crypto.Crypto;
   const sessionsRef = yield* SynchronizedRef.make<ReadonlyMap<string, Session>>(new Map());
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
 
   const getPartition = Effect.fn("BrowserSession.getPartition")(function* (
     scope = "shared",
@@ -182,7 +185,7 @@ export const make = Effect.gen(function* BrowserSessionMake() {
     // Legacy/default partitions are prefix + hex digest. The non-hex profile
     // marker creates a disjoint namespace while leaving every legacy default
     // partition byte-for-byte unchanged.
-    return `${prefix}${namespace === "profile" ? PROFILE_PARTITION_MARKER : ""}${Hex.encode(digest).slice(0, 20)}`;
+    return `${prefix}${namespace === "managed" ? "managed-" : namespace === "profile" ? PROFILE_PARTITION_MARKER : ""}${Hex.encode(digest).slice(0, 20)}`;
   });
 
   const getSession = Effect.fn("BrowserSession.getSession")(function* (
@@ -191,7 +194,7 @@ export const make = Effect.gen(function* BrowserSessionMake() {
     namespace?: BrowserSessionPartitionNamespace,
   ) {
     const partition = yield* getPartition(scope, persistent, namespace);
-    return yield* SynchronizedRef.modifyEffect(sessionsRef, (sessions) => {
+    const browserSession = yield* SynchronizedRef.modifyEffect(sessionsRef, (sessions) => {
       const existing = sessions.get(partition);
       if (existing) return Effect.succeed([existing, sessions] as const);
       return Effect.try({
@@ -221,6 +224,21 @@ export const make = Effect.gen(function* BrowserSessionMake() {
           }),
       });
     });
+    // Extensions are additive: a profile whose extensions fail to load still browses.
+    yield* Effect.tryPromise(() =>
+      ExtensionHost.enableExtensions(browserSession, `${__dirname}/extension-api-preload.cjs`, (context, cause) =>
+        runFork(Effect.logWarning("A browser extension event failed.", { partition, context, cause })),
+      ),
+    ).pipe(
+      Effect.flatMap((failures) =>
+        Effect.forEach(failures, ({ id, cause }) =>
+          Effect.logWarning("A browser extension did not load.", { partition, extensionId: id, cause }),
+          { discard: true },
+        ),
+      ),
+      Effect.catch((cause) => Effect.logWarning("Browser extensions are unavailable for this profile.", { partition, cause })),
+    );
+    return browserSession;
   });
 
   return BrowserSession.of({

@@ -64,3 +64,6 @@ export * from "./rpc.ts";
 export * from "./worktreeSetup.ts";
 export * from "./secretRequest.ts";
 export * from "./clientRpcPermissions.ts";
+export * from "./managedBrowser.ts";
+export * from "./managedBrowserControls.ts";
+export * from "./managedBrowserPeer.ts";

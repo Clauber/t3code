@@ -12,6 +12,7 @@
  *   t3 | t3.exe          the single-executable
  *   client/              web app served by the server
  *   resource-monitor/    per-platform Rust helper, same paths as the npm package
+ *   stealth-browser/     verified managed-browser baseline and installer (linux-x64, when provisioned)
  *   node_modules/        runtime externals (node-pty, msgpackr-extract, fff)
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -42,6 +43,11 @@ import {
 } from "./build-desktop-artifact.ts";
 import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import {
+  STEALTH_BROWSER_BASELINE_ENV,
+  STEALTH_BROWSER_REQUIRED_ENV,
+  stageStealthBrowserComponent,
+} from "./lib/stealth-browser-component.ts";
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64"]);
@@ -462,6 +468,7 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   readonly version: string;
   readonly outputDir: string;
   readonly resourceMonitorDir: Option.Option<string>;
+  readonly stealthBrowserBaselineDir: Option.Option<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -509,6 +516,25 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   yield* fs.copyFile(builtExecutable, path.join(contentDir, executableName));
   yield* stageWebClient(webClient, path.join(contentDir, "client"));
   yield* fs.copy(resourceMonitorDir, path.join(contentDir, "resource-monitor"));
+  // Beside the executable, like `client/`: the server reads the baseline as files, never from the SEA blob.
+  const stealthBrowser = yield* Effect.tryPromise(() =>
+    stageStealthBrowserComponent({
+      repoRoot,
+      destination: path.join(contentDir, "stealth-browser"),
+      baselineDirectory:
+        Option.getOrUndefined(input.stealthBrowserBaselineDir) ??
+        process.env[STEALTH_BROWSER_BASELINE_ENV],
+      platform:
+        input.platform === "mac" ? "darwin" : input.platform === "win" ? "win32" : input.platform,
+      arch: input.arch,
+      required: process.env[STEALTH_BROWSER_REQUIRED_ENV] === "1",
+    }),
+  );
+  yield* Effect.log(
+    stealthBrowser.status === "staged"
+      ? `[cli-archive] Staged managed browser baseline ${stealthBrowser.version}.`
+      : `[cli-archive] No managed browser baseline staged: ${stealthBrowser.reason}.`,
+  );
   yield* stageRuntimeExternals({
     repoRoot,
     stageDir: contentDir,
@@ -576,6 +602,12 @@ const command = Command.make(
     resourceMonitorDir: Flag.String("resource-monitor-dir").pipe(
       Flag.withDescription(
         "Directory laid out like dist/resource-monitor (defaults to apps/server/dist/resource-monitor).",
+      ),
+      Flag.optional,
+    ),
+    stealthBrowserBaselineDir: Flag.String("stealth-browser-baseline-dir").pipe(
+      Flag.withDescription(
+        `Directory with the signed baseline package's manifest, signature and archive (or set ${STEALTH_BROWSER_BASELINE_ENV}).`,
       ),
       Flag.optional,
     ),

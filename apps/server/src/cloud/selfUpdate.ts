@@ -22,6 +22,7 @@ import { HttpClient } from "effect/http";
 
 import { CLI_RELEASE_BASE_URL_ENV } from "@t3tools/shared/cliRelease";
 
+import { OuterUpdateGate } from "../browser/managedBrowserMaintenance.ts";
 import * as ServerConfig from "../config.ts";
 import * as DesktopAppUpdate from "../desktopUpdate/DesktopAppUpdate.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -185,6 +186,8 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
     yield* Config.String(CLI_RELEASE_BASE_URL_ENV).pipe(Config.option),
   );
   const inFlight = yield* Ref.make(false);
+  // Present only where this server hosts a managed browser. Without one, nothing is held.
+  const browserGate = yield* Effect.serviceOption(OuterUpdateGate);
 
   const capability: ServerSelfUpdateCapability | null =
     serverConfig.mode === "desktop" ? "desktop-managed" : launcher.managed ? "boot-service" : null;
@@ -192,6 +195,34 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
     cause === undefined
       ? new ServerSelfUpdateError({ reason })
       : new ServerSelfUpdateError({ reason, cause });
+
+  /**
+   * Runs a handoff that ends this process, with the managed browser's admission closed first (or the
+   * update refused while the browser is in use). `run` calls `accepted` once the handoff cannot be taken
+   * back; the hold is released only if the handoff fails before that, since afterwards the restart
+   * ends the process and admission should stay closed until then.
+   */
+  const withBrowserHold = <A, E, R>(
+    run: (accepted: Effect.Effect<void>) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.gen(function* () {
+      const hold = yield* Option.match(browserGate, {
+        onNone: () => Effect.succeed({ release: Effect.void }),
+        onSome: (gate) =>
+          gate.hold.pipe(
+            Effect.mapError((error) =>
+              failWith(
+                `The managed browser is still in use (${error.reasons.join(", ")}). Update once it is idle.`,
+                error,
+              ),
+            ),
+          ),
+      });
+      let handedOff = false;
+      return yield* run(Effect.sync(() => void (handedOff = true))).pipe(
+        Effect.onError(() => (handedOff ? Effect.void : hold.release)),
+      );
+    });
 
   const update: ServerSelfUpdate["Service"]["update"] = Effect.fn(
     "cloud.server_self_update.update",
@@ -310,19 +341,23 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         ),
       );
 
-      yield* reportProgress("installing");
-      const updateId = yield* Effect.uninterruptible(
-        launcher.requestUpdate({ targetVersion, dbPath: serverConfig.dbPath }).pipe(
-          Effect.mapError((error) =>
-            failWith(
-              error._tag === "ServiceLauncherRejectedError"
-                ? error.reason
-                : "Could not ask the service launcher to activate the prepared update.",
-              error,
+      const updateId = yield* withBrowserHold((accepted) =>
+        Effect.gen(function* () {
+          yield* reportProgress("installing");
+          return yield* Effect.uninterruptible(
+            launcher.requestUpdate({ targetVersion, dbPath: serverConfig.dbPath }).pipe(
+              Effect.mapError((error) =>
+                failWith(
+                  error._tag === "ServiceLauncherRejectedError"
+                    ? error.reason
+                    : "Could not ask the service launcher to activate the prepared update.",
+                  error,
+                ),
+              ),
+              Effect.tap(() => accepted.pipe(Effect.andThen(onHandoffAccepted()))),
             ),
-          ),
-          Effect.tap(() => onHandoffAccepted()),
-        ),
+          );
+        }),
       );
 
       yield* Effect.logInfo("Server update prepared; handing off to the service launcher.", {
@@ -337,7 +372,11 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   return ServerSelfUpdate.of({
     update,
     commitDesktopUpdate: (requestId, onHandoffAccepted) =>
-      desktopAppUpdate.commit(requestId, onHandoffAccepted),
+      withBrowserHold((accepted) =>
+        desktopAppUpdate.commit(requestId, () =>
+          accepted.pipe(Effect.andThen(onHandoffAccepted?.() ?? Effect.void)),
+        ),
+      ),
   });
 });
 

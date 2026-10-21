@@ -1,0 +1,13 @@
+{
+  "origin": "stealth-browser release worktree",
+  "sourceCommit": "279bbe3ddfac11e140e3b66fb94448650e852b2b",
+  "esbuild": "0.27.7",
+  "sources": {
+    "scripts/install.mjs": "cead681ee1b64db104741a0564bd83c26a897d535f568686b2883ff396b0e9eb",
+    "scripts/verify-release.mjs": "1bd1cd58878b838b5fa7dfeb995749c8ef958f423c353cb075a9573709107577",
+    "release/manifest.schema.json": "9cd7155d951165b2959702771df2b954b62a62cb03f40afcb288f4bd02064072"
+  },
+  "bundle": {
+    "tools/stealth-browser-installer.cjs": "1c1c34333ef51c3c55b0127ccff6c239063a24ee1e2cf3c03ec416d3738f845e"
+  }
+}

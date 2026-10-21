@@ -26,6 +26,8 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
 import * as Manager from "./Manager.ts";
+import * as ManagedBrowserPreviewAdapter from "../browser/ManagedBrowserPreviewAdapter.ts";
+import { ManagedBrowserViewerError } from "../browser/ManagedBrowserViewer.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 
@@ -1087,6 +1089,275 @@ it.live("a desktop page the desktop takes back reconnects instead of closing", (
       expect(sessions.map((session) => session.tabId)).toContain(opened.tabId);
       yield* browser.attachViewer(viewerInput(opened.tabId, false));
       expect(desktopConnections).toHaveLength(2);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+// ---------------------------------------------------------------------------
+// Named sessions in a managed browser
+// ---------------------------------------------------------------------------
+
+const managedBinding = {
+  ownerEnvironmentId: EnvironmentId.make("browser-test-environment"),
+  instanceId: "managed-instance",
+  profileId: "managed-profile",
+};
+
+/** A managed adapter that records what reaches it; the real one is tested against a real engine. */
+const fakeAdapter = (record: {
+  readonly requests: Array<{ operation: string; tabId: string | undefined }>;
+  readonly viewers: Array<{ tabId: string }>;
+  readonly closed: Array<string>;
+}) =>
+  Layer.effect(
+    ManagedBrowserPreviewAdapter.ManagedBrowserPreviewAdapter,
+    Effect.gen(function* () {
+      const manager = yield* Manager.PreviewManager;
+      const owned = new Set<string>();
+      const key = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
+      const isNamedOpen = (request: { operation: string; input: unknown }) =>
+        request.operation === "open" &&
+        (request.input as { browserBinding?: unknown }).browserBinding !== undefined;
+      return ManagedBrowserPreviewAdapter.ManagedBrowserPreviewAdapter.of({
+        ...ManagedBrowserPreviewAdapter.disabledAdapter,
+        enabled: true,
+        owns: (threadId, tabId) => owned.has(key(threadId, tabId)),
+        claims: (request) =>
+          isNamedOpen(request) ||
+          (request.tabId !== undefined &&
+            owned.has(key(request.threadId, request.tabId)) &&
+            // A request for a new tab is the ordinary browser's, even while the current tab is managed.
+            !(
+              request.operation === "open" &&
+              (request.input as { reuseExistingTab?: boolean }).reuseExistingTab === false
+            )),
+        handle: (request) =>
+          Effect.gen(function* () {
+            record.requests.push({ operation: request.operation, tabId: request.tabId });
+            if (request.operation !== "open") return { handled: request.operation };
+            const session = yield* manager
+              .open({
+                threadId: request.threadId,
+                runtime: "server",
+                reveal: false,
+                automationOwner: request.agentSessionId ?? "",
+                beforePublish: (snapshot) => {
+                  owned.add(key(request.threadId, snapshot.tabId));
+                },
+              })
+              .pipe(Effect.orDie);
+            return {
+              available: true,
+              visible: false,
+              tabId: session.tabId,
+              url: null,
+              title: null,
+              loading: false,
+            };
+          }),
+        attachViewer: (input) =>
+          Effect.gen(function* () {
+            if (!owned.has(key(input.threadId, input.tabId))) {
+              return yield* new ManagedBrowserViewerError({
+                reason: "notFound",
+              });
+            }
+            record.viewers.push({ tabId: input.tabId });
+            const output = yield* Queue.make<ServerBrowser.ServerBrowserViewerOutput>();
+            return { output, input: () => Effect.void };
+          }),
+        sessionClosed: (threadId, tabId) =>
+          Effect.sync(() => {
+            owned.delete(key(threadId, tabId));
+            record.closed.push(tabId);
+            return { _tag: "closed" } as const;
+          }),
+        openDownload: (threadId, tabId, downloadId) =>
+          Effect.succeed(
+            owned.has(key(threadId, tabId)) && downloadId === "managed-download"
+              ? Option.some({ path: "/managed/file", fileName: "managed.txt" })
+              : Option.none(),
+          ),
+      });
+    }),
+  );
+
+const withManaged = <A, E, R>(
+  record: Parameters<typeof fakeAdapter>[0],
+  body: Effect.Effect<A, E, R>,
+) =>
+  body.pipe(
+    Effect.provide(
+      ServerBrowser.layer.pipe(
+        Layer.provideMerge(fakeAdapter(record).pipe(Layer.provideMerge(dependencies))),
+      ),
+    ),
+  );
+
+const newRecord = () => ({
+  requests: [] as Array<{ operation: string; tabId: string | undefined }>,
+  viewers: [] as Array<{ tabId: string }>,
+  closed: [] as Array<string>,
+});
+
+const namedOpen = Effect.gen(function* () {
+  const broker = yield* Broker.PreviewAutomationBroker;
+  yield* Effect.yieldNow;
+  const opened = yield* broker.invoke<PreviewAutomationStatus>({
+    scope,
+    operation: "open",
+    input: { browserBinding: managedBinding, show: false },
+  });
+  return { broker, tabId: PreviewTabId.make(opened.tabId!) };
+});
+
+it.live(
+  "a named open and the operations on its tab go to the managed adapter, not a page here",
+  () => {
+    const record = newRecord();
+    return withManaged(
+      record,
+      Effect.scoped(
+        Effect.gen(function* () {
+          const browser = yield* ServerBrowser.ServerBrowser;
+          void browser;
+          desktopRendersNext = true;
+          const { broker, tabId } = yield* namedOpen;
+          // Even with a desktop ready to render a tab, a managed session is not mounted on it.
+          yield* Effect.sleep("100 millis");
+          expect(contexts.length).toBe(0);
+          expect(desktopConnections.length).toBe(0);
+          expect(record.requests).toEqual([{ operation: "open", tabId: undefined }]);
+
+          const result = yield* broker.invoke({
+            scope,
+            tabId,
+            operation: "evaluate",
+            input: { expression: "1" },
+          });
+          expect(result).toEqual({ handled: "evaluate" });
+          expect(record.requests.at(-1)).toEqual({ operation: "evaluate", tabId });
+          expect(contexts.length).toBe(0);
+        }),
+      ),
+    );
+  },
+);
+
+it.live("an ordinary open still gets its own isolated page while a managed session exists", () => {
+  const record = newRecord();
+  return withManaged(
+    record,
+    Effect.scoped(
+      Effect.gen(function* () {
+        const managed = yield* namedOpen;
+        const ordinary = yield* ready;
+        expect(contexts.length).toBe(1);
+        expect(ordinary.tabId).not.toBe(managed.tabId);
+        yield* ordinary.broker.invoke({
+          scope,
+          tabId: ordinary.tabId,
+          operation: "navigate",
+          input: { url: "http://localhost:5173/next" },
+        });
+        expect(contexts[0]!.page.goto).toHaveBeenCalled();
+        // The managed adapter saw the named open and nothing of the ordinary tab's work.
+        expect(record.requests).toEqual([{ operation: "open", tabId: undefined }]);
+      }),
+    ),
+  );
+});
+
+it.live(
+  "a viewer of a managed tab is attached by the adapter, and an unknown tab is not found",
+  () => {
+    const record = newRecord();
+    return withManaged(
+      record,
+      Effect.scoped(
+        Effect.gen(function* () {
+          const browser = yield* ServerBrowser.ServerBrowser;
+          const { tabId } = yield* namedOpen;
+          yield* browser.attachViewer(viewerInput(tabId, true));
+          expect(record.viewers).toEqual([{ tabId }]);
+          expect(contexts.length).toBe(0);
+          const missing = yield* browser
+            .attachViewer(viewerInput("no-such-tab", true))
+            .pipe(Effect.flip);
+          expect(missing._tag).toBe("ServerBrowserTabNotFoundError");
+        }),
+      ),
+    );
+  },
+);
+
+it.live("a managed tab's download is served from the adapter, and no other tab's", () => {
+  const record = newRecord();
+  return withManaged(
+    record,
+    Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* ServerBrowser.ServerBrowser;
+        const { tabId } = yield* namedOpen;
+        const threadId = scope.thread.threadId;
+        const served = yield* browser.openDownload({
+          threadId,
+          tabId,
+          downloadId: "managed-download",
+        });
+        expect(Option.getOrNull(served)).toEqual({
+          path: "/managed/file",
+          fileName: "managed.txt",
+        });
+        const other = yield* browser.openDownload({ threadId, tabId, downloadId: "someone-elses" });
+        expect(Option.isNone(other)).toBe(true);
+        const unmanaged = yield* browser.openDownload({
+          threadId,
+          tabId: "not-managed",
+          downloadId: "managed-download",
+        });
+        expect(Option.isNone(unmanaged)).toBe(true);
+      }),
+    ),
+  );
+});
+
+it.live("closing a managed session tells the adapter and leaves the ordinary browser alone", () => {
+  const record = newRecord();
+  return withManaged(
+    record,
+    Effect.scoped(
+      Effect.gen(function* () {
+        const manager = yield* Manager.PreviewManager;
+        const { tabId } = yield* namedOpen;
+        yield* manager.close({ threadId: scope.thread.threadId, tabId });
+        yield* Effect.sleep("100 millis");
+        expect(record.closed).toEqual([tabId]);
+        expect(contexts.length).toBe(0);
+      }),
+    ),
+  );
+});
+
+it.live("a named open on a server without a managed browser fails by name and opens nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* Broker.PreviewAutomationBroker;
+      const manager = yield* Manager.PreviewManager;
+      yield* ServerBrowser.ServerBrowser;
+      yield* Effect.yieldNow;
+      const failure = yield* broker
+        .invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: { browserBinding: managedBinding, show: false },
+        })
+        .pipe(Effect.flip);
+      expect(failure._tag).toBe("PreviewAutomationUnsupportedClientError");
+      // No temporary tab was substituted.
+      yield* Effect.sleep("100 millis");
+      expect(contexts.length).toBe(0);
+      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toEqual([]);
     }),
   ).pipe(Effect.provide(layer)),
 );

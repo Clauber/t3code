@@ -23,6 +23,14 @@
       "types": "./src/preview/serverBrowserStream.ts",
       "default": "./src/preview/serverBrowserStream.ts"
     },
+    "./managed-browser": {
+      "types": "./src/managedBrowser/controls.ts",
+      "default": "./src/managedBrowser/controls.ts"
+    },
+    "./managed-browser/pairing": {
+      "types": "./src/managedBrowser/pairing.ts",
+      "default": "./src/managedBrowser/pairing.ts"
+    },
     "./worktree-setup": {
       "types": "./src/worktreeSetup.ts",
       "default": "./src/worktreeSetup.ts"
@@ -182,6 +190,10 @@
     "./state/preview": {
       "types": "./src/state/preview.ts",
       "default": "./src/state/preview.ts"
+    },
+    "./state/managed-browser": {
+      "types": "./src/state/managedBrowser.ts",
+      "default": "./src/state/managedBrowser.ts"
     },
     "./state/projects": {
       "types": "./src/state/projects.ts",

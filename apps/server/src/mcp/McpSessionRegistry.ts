@@ -39,6 +39,10 @@ export interface McpSessionRegistryShape {
    * credential even when it goes a long time without touching an MCP tool.
    */
   readonly touch: (threadId: ThreadId) => Effect.Effect<void>;
+  /** Identifier-only server inspection; does not extend credential liveness. */
+  readonly describe: (
+    providerSessionId: string,
+  ) => Effect.Effect<McpInvocationContext.McpThreadInvocationScope | undefined>;
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
   readonly revokeThread: (threadId: ThreadId) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
@@ -205,6 +209,17 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   return McpSessionRegistry.of({
     issue,
     resolve,
+    describe: (providerSessionId) =>
+      Effect.gen(function* () {
+        const timestamp = yield* currentTimeMillis;
+        return yield* SynchronizedRef.modify(state, ({ records }) => {
+          const current = pruneDead(records, timestamp);
+          const record = [...current.values()].find(
+            (entry) => entry.scope.thread.providerSessionId === providerSessionId,
+          );
+          return [record?.scope, { records: current }] as const;
+        });
+      }),
     touch,
     revokeProviderSession: Effect.fn("McpSessionRegistry.revokeProviderSession")(
       function* (providerSessionId) {

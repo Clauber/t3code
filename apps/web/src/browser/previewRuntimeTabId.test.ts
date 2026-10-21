@@ -1,9 +1,42 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, PreviewManagedSession, ThreadId } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import { isCurrentPreviewRuntimeTab, previewRuntimeTabId } from "./previewRuntimeTabId";
 
 describe("previewRuntimeTabId", () => {
+  it("reuses one native guest across participants without sharing ordinary or other-profile guests", () => {
+    const ref = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("one") };
+    const managed = Schema.decodeUnknownSync(PreviewManagedSession)({
+      ownerEnvironmentId: "env",
+      instanceId: "instance",
+      profileId: "profile",
+      incarnation: "boot",
+      engineTabId: "page",
+      hostThreadId: "one",
+      hostTabId: "tab-one",
+      native: true,
+      shared: true,
+      remote: false,
+    });
+    const identity = previewRuntimeTabId(ref, "epoch", "tab-one", managed);
+    expect(
+      previewRuntimeTabId({ ...ref, threadId: ThreadId.make("two") }, "epoch", "tab-two", {
+        ...managed,
+        hostThreadId: "two",
+      }),
+    ).toBe(identity);
+    expect(previewRuntimeTabId(ref, "epoch", "tab-one")).not.toBe(identity);
+    expect(previewRuntimeTabId(ref, "epoch", "tab-one", { ...managed, native: false })).not.toBe(
+      identity,
+    );
+    const otherProfile = Schema.decodeUnknownSync(PreviewManagedSession)({
+      ...managed,
+      profileId: "other",
+    });
+    expect(previewRuntimeTabId(ref, "epoch", "tab-one", otherProfile)).not.toBe(identity);
+  });
+
   it("scopes process-local tab ids to their environment, thread, and server epoch", () => {
     const base = {
       environmentId: EnvironmentId.make("environment-a"),

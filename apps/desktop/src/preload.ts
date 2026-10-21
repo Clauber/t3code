@@ -333,6 +333,23 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
     openDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
+    extensions: {
+      list: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSIONS_LIST_CHANNEL, { tabId }),
+      prepareInstall: (tabId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSIONS_PREPARE_INSTALL_CHANNEL, { tabId }),
+      commitInstall: (token) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSIONS_COMMIT_INSTALL_CHANNEL, { token }),
+      discardInstall: (token) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSIONS_DISCARD_INSTALL_CHANNEL, { token }),
+      uninstall: (tabId, extensionId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSIONS_UNINSTALL_CHANNEL, { tabId, extensionId }),
+      openPopup: (tabId, extensionId, anchor) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_EXTENSIONS_OPEN_POPUP_CHANNEL, {
+          tabId,
+          extensionId,
+          anchor,
+        }),
+    },
     listBrowserImportSources: () => ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_SOURCES_CHANNEL),
     importBrowserCookies: (input) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_COOKIES_CHANNEL, input),
@@ -340,8 +357,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL, { environmentId, profileId }),
     clearCache: (environmentId, profileId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_CACHE_CHANNEL, { environmentId, profileId }),
-    getPreviewConfig: (environmentId, profileId) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_GET_CONFIG_CHANNEL, { environmentId, profileId }),
+    getPreviewConfig: (environmentId, profileId, managedProfileId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_GET_CONFIG_CHANNEL, { environmentId, profileId, managedProfileId }),
     setAnnotationTheme: (theme) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_ANNOTATION_THEME_CHANNEL, { theme }),
     setAnnotationSendEnabled: (tabId, enabled) =>

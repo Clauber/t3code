@@ -36,6 +36,11 @@ import {
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import {
+  STEALTH_BROWSER_BASELINE_ENV,
+  STEALTH_BROWSER_REQUIRED_ENV,
+  stageStealthBrowserComponent,
+} from "./lib/stealth-browser-component.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -960,6 +965,11 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/resources/browser-secret/**/*",
   "!apps/desktop/prod-resources/browser-secret",
   "!apps/desktop/prod-resources/browser-secret/**/*",
+  // The managed browser's verified baseline is read as plain files, so it ships once, outside app.asar.
+  "!apps/desktop/resources/stealth-browser",
+  "!apps/desktop/resources/stealth-browser/**/*",
+  "!apps/desktop/prod-resources/stealth-browser",
+  "!apps/desktop/prod-resources/stealth-browser/**/*",
   // Windows stages the server sidecar below prod-resources so electron-builder
   // can copy it using project-relative extraResources matchers. Keep those
   // staging inputs out of app.asar; they are emitted once at resources/.
@@ -1097,6 +1107,10 @@ export const LINUX_CAPTURE_EXTRA_RESOURCES = [
     to: "gnome-extension",
     filter: gnomeCaptureBundle.files,
   },
+] as const;
+/** The verified managed browser baseline and installer, linked into resources/ outside the asar. */
+export const STEALTH_BROWSER_EXTRA_RESOURCES = [
+  { from: "apps/desktop/prod-resources/stealth-browser", to: "stealth-browser" },
 ] as const;
 export const LINUX_BROWSER_SECRET_EXTRA_RESOURCES = [
   { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
@@ -2667,6 +2681,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // source file was never written fails the electron-builder step.
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
+  // False unless staging produced the component, for the same reason as the WSL archive above.
+  stealthBrowserBundled = false,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
@@ -2696,6 +2712,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
+      ...(stealthBrowserBundled ? STEALTH_BROWSER_EXTRA_RESOURCES : []),
     ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
@@ -3621,6 +3638,27 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     arch: options.arch,
     verbose: options.verbose,
   });
+  // The managed browser's verified baseline ships as plain files in resources/, never inside app.asar.
+  const stealthBrowser = yield* Effect.tryPromise(() =>
+    stageStealthBrowserComponent({
+      repoRoot,
+      destination: path.join(stageResourcesDir, "stealth-browser"),
+      baselineDirectory: process.env[STEALTH_BROWSER_BASELINE_ENV],
+      platform:
+        options.platform === "mac"
+          ? "darwin"
+          : options.platform === "win"
+            ? "win32"
+            : options.platform,
+      arch: options.arch,
+      required: process.env[STEALTH_BROWSER_REQUIRED_ENV] === "1",
+    }),
+  );
+  yield* Effect.log(
+    stealthBrowser.status === "staged"
+      ? `[desktop-artifact] Staged managed browser baseline ${stealthBrowser.version}.`
+      : `[desktop-artifact] No managed browser baseline staged: ${stealthBrowser.reason}.`,
+  );
   if (options.platform === "linux") {
     for (const backend of ["kde", "hyprland"] as const)
       yield* stageLinuxCaptureHelper({
@@ -3733,6 +3771,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         : undefined,
       bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
       options.arch,
+      stealthBrowser.status === "staged",
     ),
     dependencies: stageDependencies,
     devDependencies: {

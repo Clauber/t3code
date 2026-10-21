@@ -499,6 +499,26 @@ export const isPreviewRefreshShortcut = (input: Electron.Input): boolean =>
   !input.shift &&
   !input.alt;
 
+/** Cmd+F (Ctrl+F elsewhere): the page has no find of its own, so the app's find bar takes it. */
+export const isPreviewFindShortcut = (input: Electron.Input, platform: NodeJS.Platform): boolean =>
+  input.type === "keyDown" &&
+  input.key.toLowerCase() === "f" &&
+  (platform === "darwin" ? input.meta && !input.control : input.control && !input.meta) &&
+  !input.shift &&
+  !input.alt;
+
+/** The menu action that opens the find bar for the preview page holding keyboard focus. */
+export const PREVIEW_FIND_MENU_ACTION = "preview.find";
+
+/**
+ * Whether this page is the one taking the user's keys. Every guest in the key
+ * window reports isFocused(), so webContents.getFocusedWebContents() only ever
+ * names the first of them. A guest's focusedFrame is null unless focus is
+ * inside it.
+ */
+export const holdsKeyboardFocus = (contents: Electron.WebContents): boolean =>
+  contents.isFocused() && (!contents.hostWebContents || contents.focusedFrame !== null);
+
 export const isPreviewEditingShortcut = (
   input: Electron.Input,
   platform: NodeJS.Platform,
@@ -1509,8 +1529,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       // Native editing roles must remain available after the page handles the key.
       // Background automation must not edit whichever other renderer has focus.
       contents.setIgnoreMenuShortcuts(
-        !isPreviewEditingShortcut(input, hostPlatform) ||
-          webContents.getFocusedWebContents() !== contents,
+        !isPreviewEditingShortcut(input, hostPlatform) || !holdsKeyboardFocus(contents),
       );
     };
     // A popup opens with Electron's default handler, so the page inside it could
@@ -1531,7 +1550,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         !input.isComposing &&
         host &&
         !host.isDestroyed() &&
-        webContents.getFocusedWebContents() === wc &&
+        holdsKeyboardFocus(wc) &&
         !(
           hostPlatform !== "darwin" &&
           input.control &&
@@ -1555,6 +1574,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (forwarded && host) {
         event.preventDefault();
         if (!input.isAutoRepeat) host.send(MENU_ACTION_CHANNEL, forwarded.command);
+        return;
+      }
+      if (isPreviewFindShortcut(input, hostPlatform) && host && !host.isDestroyed() && holdsKeyboardFocus(wc)) {
+        event.preventDefault();
+        if (!input.isAutoRepeat) host.send(MENU_ACTION_CHANNEL, PREVIEW_FIND_MENU_ACTION);
         return;
       }
       if (isPreviewRefreshShortcut(input)) {
@@ -3367,6 +3391,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     reapplyZoom,
     refresh,
     registerWebview,
+    requireWebContents,
     resetZoom: (tabId: string) => applyZoom(tabId, () => DEFAULT_ZOOM_FACTOR),
     setZoomFactor: (tabId: string, zoomFactor: number) =>
       applyZoom(tabId, () => normalizeZoomFactor(zoomFactor)),
@@ -3584,6 +3609,8 @@ export class PreviewManager extends Context.Service<
       audioMuted: boolean,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly openDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    /** The tab's guest, for profile features that act on the tab's own session, such as extensions. */
+    readonly getTabWebContents: (tabId: string) => Effect.Effect<Electron.WebContents, PreviewManagerError>;
     readonly clearCookies: (
       partitions?: ReadonlyArray<string>,
     ) => Effect.Effect<void, PreviewManagerError>;
@@ -3691,6 +3718,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     setZoomFactor: operations.setZoomFactor,
     setAudioMuted: operations.setAudioMuted,
     openDevTools: operations.openDevTools,
+    getTabWebContents: operations.requireWebContents,
     clearCookies: Effect.fn("PreviewManager.clearCookies")(function* (partitions) {
       yield* browserSession
         .clearCookies(partitions)

@@ -2322,9 +2322,15 @@ export default function ChatView(props: ChatViewProps) {
   const resolvePreviewRuntimeTabId = useMemo(
     () =>
       activeThreadRef
-        ? (tabId: string) => previewRuntimeTabId(activeThreadRef, activePreviewServerEpoch, tabId)
+        ? (tabId: string) =>
+            previewRuntimeTabId(
+              activeThreadRef,
+              activePreviewServerEpoch,
+              tabId,
+              activePreviewState.sessions[tabId]?.managed,
+            )
         : undefined,
-    [activeThreadRef, activePreviewServerEpoch],
+    [activeThreadRef, activePreviewServerEpoch, activePreviewState.sessions],
   );
   const activePreviewMiniPlayer = usePreviewMiniPlayerStore((state) =>
     selectThreadPreviewMiniPlayer(state.byThreadKey, activeThreadRef),

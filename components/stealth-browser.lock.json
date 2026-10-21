@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "adapterVersion": "1.0.0",
+  "engineProtocolVersion": "1.0.0",
+  "requiredCapabilities": [
+    "open",
+    "attach",
+    "execute",
+    "subscribe",
+    "ack",
+    "upload",
+    "download",
+    "closeTab",
+    "shutdown",
+    "persistent-profile"
+  ],
+  "trustedPublicKeys": [
+    "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEALuaX6MZ9wQ02vzCd1IZ3QGY3sMR6XU8Bg+eTmLobX5U=\n-----END PUBLIC KEY-----\n"
+  ],
+  "baselines": {
+    "linux-x64": {
+      "version": "2.0.0-embedded.20261017.1",
+      "archiveSha256": "f301ee2ee3cb592d79a0207a233457ab7b9f6a7d053720bc13ee576f60d36fa0",
+      "manifestSha256": "faf4f6179f4543c6f60d1c130018910649f97dd4497307e057adb86162688476"
+    },
+    "darwin-arm64": {
+      "version": "2.0.0-embedded.20261017.1",
+      "archiveSha256": "1095b3e884b5be50992d539bc94a2db4ce8feb9f69f8db84ff0d67156c2da987",
+      "manifestSha256": "8c2ee69de187dabed323c22117b67d964cb37f9b19ceaa729ef550574d6b04ae"
+    }
+  },
+  "releaseSource": null
+}

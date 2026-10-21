@@ -1,4 +1,4 @@
-// @effect-diagnostics globalTimers:off globalFetch:off - This browser and WebView transport runs without an Effect runtime.
+// @effect-diagnostics globalTimers:off globalFetch:off globalDate:off globalRandom:off cryptoRandomUUID:off - This browser and WebView transport runs without an Effect runtime.
 import { type DeviceHubAccess, withDeviceHubQuery } from "../device/hubAccess.ts";
 import {
   PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE,
@@ -17,8 +17,14 @@ export type PreviewStreamMouseButton = "none" | "left" | "middle" | "right";
 
 export interface PreviewStreamControl {
   readonly canOperate: boolean;
-  readonly controller: "agent" | "you" | "another-viewer" | "unclaimed";
+  /**
+   * `held-for-you` and `paused` are a shared browser's: control kept for this person while they
+   * reconnect, and a browser nobody may act in until someone takes control on purpose.
+   */
+  readonly controller: "agent" | "you" | "another-viewer" | "unclaimed" | "held-for-you" | "paused";
   readonly generation: number;
+  /** While control is held for a reconnect: when the hold ends, in milliseconds since the epoch. */
+  readonly holdExpiresAtMs?: number;
   readonly dialog: null | {
     readonly type: string;
     readonly message: string;
@@ -38,7 +44,20 @@ export const previewStreamControlLabel = (control: PreviewStreamControl | null):
           ? "Agent has control"
           : control.controller === "another-viewer"
             ? "Another viewer has control"
-            : "Watching";
+            : control.controller === "held-for-you"
+              ? "Your control is on hold"
+              : control.controller === "paused"
+                ? "Paused"
+                : "Watching";
+
+/** What a viewer is showing: the page alone, or the whole browser window with its toolbar and dialogs. */
+export type PreviewStreamSurfaceKind = "page" | "window";
+
+export interface PreviewStreamSurface {
+  readonly current: PreviewStreamSurfaceKind;
+  /** Whether the whole window can be shown, and when it cannot, a sentence saying why. */
+  readonly window: { readonly available: boolean; readonly reason?: string };
+}
 
 const isPreviewStreamDialog = (value: unknown): value is PreviewStreamControl["dialog"] =>
   value === null ||
@@ -53,6 +72,8 @@ const isPreviewStreamDialog = (value: unknown): value is PreviewStreamControl["d
 /** Client-to-server messages. Coordinates are page CSS px. */
 export type PreviewStreamInput =
   | { readonly type: "takeControl" }
+  /** Watching, not acting: allowed to a viewer that cannot control the page. */
+  | { readonly type: "surface"; readonly surface: PreviewStreamSurfaceKind }
   | { readonly type: "releaseControl" }
   | { readonly type: "dialog"; readonly accept: boolean; readonly promptText?: string }
   | { readonly type: "viewport"; readonly setting: PreviewViewportSetting }
@@ -188,6 +209,11 @@ export interface PreviewStreamTarget {
   readonly maxHeight: number;
   /** Passive viewers reduce their own access, including automatic control grants. */
   readonly interactive?: boolean;
+  /**
+   * Names this viewer to the server across reconnects, so control it held is its to resume. Chosen
+   * once per client when omitted.
+   */
+  readonly viewerKey?: string;
 }
 
 export interface PreviewStreamEvents {
@@ -198,6 +224,8 @@ export interface PreviewStreamEvents {
   /** The agent's cursor moved to, or clicked at, a page point. */
   readonly onPointer?: (pointer: PreviewStreamPointer) => void;
   readonly onControl?: (control: PreviewStreamControl) => void;
+  /** A shared browser's choice of page or whole window, and whether the window is on offer. */
+  readonly onSurface?: (surface: PreviewStreamSurface) => void;
   /** Text the page just copied or cut while this viewer had control. */
   readonly onClipboard?: (text: string) => void;
   /** A file the page downloaded while this viewer had control. */
@@ -221,6 +249,15 @@ export interface PreviewStreamClient {
 }
 
 const ACK_MESSAGE = JSON.stringify({ type: "ack" });
+
+const newViewerKey = () =>
+  (
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+  ).replaceAll(/[^A-Za-z0-9_.-]/g, "");
+
+const isSurfaceKind = (value: unknown): value is PreviewStreamSurfaceKind =>
+  value === "page" || value === "window";
 export function createPreviewStreamClient(
   target: PreviewStreamTarget,
   events: PreviewStreamEvents,
@@ -232,6 +269,7 @@ export function createPreviewStreamClient(
     maxHeight: String(Math.max(1, Math.round(target.maxHeight))),
   });
   if (target.interactive === false) query.set("interactive", "false");
+  query.set("viewerKey", target.viewerKey ?? newViewerKey());
   const url = withDeviceHubQuery(`${target.access.wsBase}/ws?${query.toString()}`, target.access);
   let stopped = false;
   let socket: WebSocket | null = null;
@@ -286,6 +324,9 @@ export function createPreviewStreamClient(
         accept,
         phase,
         sequence,
+        current,
+        window: windowOffer,
+        holdExpiresAtMs,
       } = message as Record<string, unknown>;
       if (
         type === "fileChooser" &&
@@ -336,12 +377,26 @@ export function createPreviewStreamClient(
       ) {
         events.onProbe?.({ x, y, editable });
       } else if (
+        type === "surface" &&
+        isSurfaceKind(current) &&
+        typeof windowOffer === "object" &&
+        windowOffer !== null &&
+        typeof (windowOffer as { available?: unknown }).available === "boolean"
+      ) {
+        const { available, reason } = windowOffer as { available: boolean; reason?: unknown };
+        events.onSurface?.({
+          current,
+          window: { available, ...(typeof reason === "string" ? { reason } : {}) },
+        });
+      } else if (
         type === "control" &&
         typeof canOperate === "boolean" &&
         (controller === "agent" ||
           controller === "you" ||
           controller === "another-viewer" ||
-          controller === "unclaimed") &&
+          controller === "unclaimed" ||
+          controller === "held-for-you" ||
+          controller === "paused") &&
         typeof generation === "number" &&
         isPreviewStreamDialog(dialog)
       ) {
@@ -350,6 +405,9 @@ export function createPreviewStreamClient(
           controller,
           generation,
           dialog,
+          ...(typeof holdExpiresAtMs === "number" && Number.isFinite(holdExpiresAtMs)
+            ? { holdExpiresAtMs }
+            : {}),
         };
         control = nextControl;
         events.onControl?.(nextControl);
@@ -387,6 +445,11 @@ export function createPreviewStreamClient(
   return {
     send: (input) => {
       if (socket?.readyState !== WebSocket.OPEN) return false;
+      // What to watch is the viewer's own choice, whatever it may do to the page.
+      if (input.type === "surface") {
+        socket.send(JSON.stringify(input));
+        return true;
+      }
       if (!control?.canOperate) return false;
       if (input.type !== "takeControl" && control.controller !== "you") return false;
       socket.send(JSON.stringify(input));

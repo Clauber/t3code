@@ -9,6 +9,12 @@ import {
   PreviewViewportSetting,
   PreviewViewportSize,
 } from "./preview.ts";
+import {
+  ManagedBrowserIncarnation,
+  ManagedBrowserInstanceId,
+  ManagedBrowserProfileId,
+  ManagedBrowserTabId,
+} from "./managedBrowser.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 const BoundedUrl = Schema.String.check(Schema.isTrimmed())
@@ -53,6 +59,7 @@ export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
   "hover",
   "select",
   "drag",
+  "sharedTabs",
 ] as const;
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_SERVER_OPERATIONS);
 export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
@@ -71,6 +78,74 @@ const PreviewAutomationTabTargetFields = {
 
 export const PreviewAutomationTabTargetInput = Schema.Struct(PreviewAutomationTabTargetFields);
 export type PreviewAutomationTabTargetInput = typeof PreviewAutomationTabTargetInput.Type;
+
+/**
+ * Names the managed browser a named session lives in: one persistent profile in one instance, owned
+ * by one T3 environment. A session id alone grants nothing; the owner checks every call against its
+ * own grants.
+ */
+export const PreviewAutomationBrowserBinding = Schema.Struct({
+  ownerEnvironmentId: EnvironmentId.annotate({
+    description:
+      "The T3 environment that owns the browser. Another environment's browser is used only through a grant its administrator made for this thread; `localhost` in a URL then means that environment.",
+  }),
+  instanceId: ManagedBrowserInstanceId.annotate({
+    description: "The managed browser instance to open the session in.",
+  }),
+  profileId: ManagedBrowserProfileId.annotate({
+    description: "The persistent browser profile the session uses. Cookies and storage persist.",
+  }),
+}).annotate({
+  description:
+    "Opens a named, shared session in a managed persistent browser instead of an isolated temporary tab.",
+});
+export type PreviewAutomationBrowserBinding = typeof PreviewAutomationBrowserBinding.Type;
+
+/**
+ * Asks to attach this thread to a managed tab that already exists, instead of opening a new one. The
+ * tab must be one this thread already holds, or one a participant explicitly shared; knowing its id
+ * grants nothing. With `incarnation`, a browser that has restarted since is reported as stale rather
+ * than silently attached to.
+ */
+export const PreviewAutomationJoinTab = Schema.Struct({
+  engineTabId: ManagedBrowserTabId.annotate({
+    description: "The shared tab's id, as `managed.engineTabId` in its status.",
+  }),
+  incarnation: Schema.optional(
+    ManagedBrowserIncarnation.annotate({
+      description: "The browser boot the tab was last seen in; a different boot fails as stale.",
+    }),
+  ),
+}).annotate({
+  description:
+    "Attach to a managed tab this thread already holds or another thread shared, by the id in its status, instead of opening a new one.",
+});
+export type PreviewAutomationJoinTab = typeof PreviewAutomationJoinTab.Type;
+
+/** What a managed tab reports about the browser it lives in. */
+export const PreviewAutomationManagedStatus = Schema.Struct({
+  /** The owner renders this page in its native desktop guest. */
+  native: Schema.optional(Schema.Boolean),
+  ownerEnvironmentId: EnvironmentId,
+  instanceId: ManagedBrowserInstanceId,
+  profileId: ManagedBrowserProfileId,
+  incarnation: ManagedBrowserIncarnation,
+  /** The browser's own id for the page. Identical for every participant of a shared tab; `tabId` is per thread. */
+  engineTabId: Schema.optional(ManagedBrowserTabId),
+  /** Whether other granted threads may join this tab, and how many threads hold it now. */
+  shared: Schema.optional(Schema.Boolean),
+  participants: Schema.optional(Schema.Int),
+  /** Who may act now: agents, a human, or nobody while ownership changes or is paused. */
+  phase: Schema.Literals([
+    "agent",
+    "human",
+    "reconnectHold",
+    "paused",
+    "transferring",
+    "unavailable",
+  ]),
+});
+export type PreviewAutomationManagedStatus = typeof PreviewAutomationManagedStatus.Type;
 
 export const PreviewAutomationStatus = Schema.Struct({
   available: Schema.Boolean,
@@ -115,6 +190,8 @@ export const PreviewAutomationStatus = Schema.Struct({
       }),
     ),
   ),
+  /** Managed sessions: the owner, instance, profile and boot this tab lives in. */
+  managed: Schema.optional(PreviewAutomationManagedStatus),
   /** Server hosts: every tab this agent session owns, including popups its pages opened. */
   tabs: Schema.optional(
     Schema.Array(
@@ -162,6 +239,14 @@ export const PreviewAutomationOpenInput = Schema.Struct({
         "Reuse tabId when supplied, otherwise this agent session's current tab. Defaults to true; set false to create a new tab.",
     }),
   ),
+  browserBinding: Schema.optional(PreviewAutomationBrowserBinding),
+  shareTab: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "With browserBinding: let other threads that hold a grant for this browser join this tab with joinTab. Off by default; the tab's id alone never admits anyone.",
+    }),
+  ),
+  joinTab: Schema.optional(PreviewAutomationJoinTab),
 })
   .check(
     Schema.makeFilter(
@@ -169,12 +254,46 @@ export const PreviewAutomationOpenInput = Schema.Struct({
         !(input.tabId !== undefined && input.reuseExistingTab === false) ||
         "tabId cannot be combined with reuseExistingTab=false.",
     ),
+    Schema.makeFilter(
+      (input) =>
+        !(
+          (input.shareTab !== undefined || input.joinTab !== undefined) &&
+          input.browserBinding === undefined
+        ) || "shareTab and joinTab need a browserBinding.",
+    ),
   )
   .annotate({
     description:
       "Opens the collaborative browser for the current thread. Use preview_navigate afterward when readiness waiting matters.",
   });
 export type PreviewAutomationOpenInput = typeof PreviewAutomationOpenInput.Type;
+
+/** Asks which tabs of a managed browser other threads shared on purpose. Nothing private is listed. */
+export const PreviewAutomationSharedTabsInput = Schema.Struct({
+  browserBinding: PreviewAutomationBrowserBinding,
+}).annotate({
+  description:
+    "Lists the pages people and other threads shared in a managed browser this thread has a grant for, each with what to pass as joinTab.",
+});
+export type PreviewAutomationSharedTabsInput = typeof PreviewAutomationSharedTabsInput.Type;
+
+export const PreviewAutomationSharedTab = Schema.Struct({
+  engineTabId: ManagedBrowserTabId,
+  incarnation: ManagedBrowserIncarnation,
+  title: Schema.String,
+  url: Schema.NullOr(Schema.String),
+  participants: Schema.Int,
+  phase: PreviewAutomationManagedStatus.fields.phase,
+  /** Whether this thread already holds the page. */
+  held: Schema.Boolean,
+});
+export type PreviewAutomationSharedTab = typeof PreviewAutomationSharedTab.Type;
+
+export const PreviewAutomationSharedTabs = Schema.Struct({
+  browserBinding: PreviewAutomationBrowserBinding,
+  tabs: Schema.Array(PreviewAutomationSharedTab),
+});
+export type PreviewAutomationSharedTabs = typeof PreviewAutomationSharedTabs.Type;
 
 export const BrowserNavigationTarget = Schema.Union([
   Schema.Struct({
@@ -775,11 +894,25 @@ export const PreviewAutomationRequest = Schema.Struct({
   tabIdExplicit: Schema.optional(Schema.Boolean),
   /** Supplied by the broker from authenticated scope, never from tool input. */
   agentSessionId: Schema.optional(Schema.String),
+  /**
+   * The environment the calling agent runs in, from authenticated scope. It is the caller's, not the
+   * owner's: a managed browser may be driven from another T3 server.
+   */
+  callerEnvironmentId: Schema.optional(EnvironmentId),
   operation: PreviewAutomationOperation,
   input: Schema.Unknown,
   timeoutMs: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 export type PreviewAutomationRequest = typeof PreviewAutomationRequest.Type;
+
+/** The managed browser a request names: only an open and a shared-tab listing can. */
+export const previewAutomationBrowserBinding = (
+  request: Pick<PreviewAutomationRequest, "operation" | "input">,
+): PreviewAutomationBrowserBinding | undefined =>
+  request.operation === "open" || request.operation === "sharedTabs"
+    ? (request.input as { readonly browserBinding?: PreviewAutomationBrowserBinding } | undefined)
+        ?.browserBinding
+    : undefined;
 
 export const PreviewAutomationStreamEvent = Schema.Union([
   Schema.Struct({

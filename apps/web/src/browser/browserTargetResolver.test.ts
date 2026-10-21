@@ -348,3 +348,16 @@ describe("browser target resolver", () => {
     expect(publicHosts.filter((host) => !isPublicFaviconHost(host))).toEqual([]);
   });
 });
+
+it("keeps remote discovered localhost off the Mac when the chat uses a loopback tunnel", async () => {
+  readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://127.0.0.1:40231" });
+  const { resolveDiscoveredServerUrlForBrowser } = await import("./browserTargetResolver");
+  expect(() => resolveDiscoveredServerUrlForBrowser(EnvironmentId.make("harness"), EnvironmentId.make("mac"), "http://localhost:3000/app")).toThrow("Configure port forwarding");
+  expect(resolveDiscoveredServerUrlForBrowser(EnvironmentId.make("mac"), EnvironmentId.make("mac"), "http://localhost:3000/app")).toBe("http://localhost:3000/app");
+});
+
+it("maps a remote discovered service through its explicitly reachable private host", async () => {
+  readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://100.64.0.10:3773" });
+  const { resolveDiscoveredServerUrlForBrowser } = await import("./browserTargetResolver");
+  expect(resolveDiscoveredServerUrlForBrowser(EnvironmentId.make("harness"), EnvironmentId.make("mac"), "http://localhost:3000/app?q=1#result")).toBe("http://100.64.0.10:3000/app?q=1#result");
+});

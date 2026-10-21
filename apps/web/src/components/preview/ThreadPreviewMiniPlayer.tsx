@@ -24,6 +24,10 @@ import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { useRendersServerTabNatively } from "~/browser/previewRuntime";
 import { type ServerBrowserHandle, ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
 import {
+  managedOwnerUnavailableMessage,
+  useManagedStreamTarget,
+} from "~/browser/managedStreamTarget";
+import {
   closeServerPictureInPicture,
   openServerPictureInPicture,
   serverPictureInPictureKey,
@@ -119,7 +123,11 @@ export function ThreadPreviewMiniPlayer({ threadRef, miniPlayer }: Props) {
 function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly tabId: string }) {
   const previewState = useThreadPreviewState(threadRef);
   const snapshot = previewState.sessions[tabId] ?? null;
-  const runtimeTabId = previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId);
+  const stream = useManagedStreamTarget(
+    snapshot ?? { threadId: threadRef.threadId, tabId },
+    threadRef.environmentId,
+  );
+  const runtimeTabId = previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId, previewState.sessions[tabId]?.managed);
   const recordingTabIds = useActiveBrowserRecordingTabIds();
   const recording =
     recordingTabIds.has(runtimeTabId) ||
@@ -154,8 +162,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
         if (serverPictureInPicture) closeServerPictureInPicture();
         else
           await openServerPictureInPicture({
-            ...threadRef,
-            tabId,
+            ...stream.target,
             seed: serverSurfaceRef.current?.canvas() ?? null,
           });
       } else if (previewBridge) {
@@ -219,15 +226,23 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
           >
             <ServerBrowserSurface
               ref={serverSurfaceRef}
-              environmentId={threadRef.environmentId}
-              threadId={threadRef.threadId}
-              tabId={tabId}
-              visible
+              environmentId={stream.target.environmentId}
+              threadId={stream.target.threadId}
+              tabId={stream.target.tabId}
+              visible={stream.ready}
               followSize={false}
               controlPosition="bottom"
               onViewport={setStreamViewport}
               className="size-full"
             />
+            {stream.ready ? null : (
+              <div
+                role="status"
+                className="absolute inset-0 flex items-center justify-center bg-background p-4 text-center text-xs text-muted-foreground"
+              >
+                {managedOwnerUnavailableMessage(stream.ownerLabel)}
+              </div>
+            )}
           </div>
         ) : (
           <>

@@ -1,3 +1,6 @@
+import { confirmsManagedOwner } from "~/browser/managedOwnerSession";
+import { ManagedThreadBrowserEnrollment } from "~/browser/ManagedThreadBrowserEnrollment";
+import { ManagedNativeControl } from "~/browser/ManagedNativeControl";
 "use client";
 
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
@@ -7,6 +10,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   AuthOrchestrationOperateScope,
+  ThreadId,
   DEFAULT_BROWSER_PROFILE_ID,
   FILL_PREVIEW_VIEWPORT,
   type PreviewAnnotationPayload,
@@ -34,7 +38,7 @@ import {
   updatePreviewServerSnapshot,
   useThreadPreviewState,
 } from "~/previewStateStore";
-import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
+import { resolveDiscoveredServerUrl, resolveDiscoveredServerUrlForBrowser } from "~/browser/browserTargetResolver";
 import { useEnvironmentHttpBaseUrl } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -51,6 +55,7 @@ import { subscribePreviewAction } from "./previewActionBus";
 import { openPreviewSession } from "./openPreviewSession";
 import { PreviewChromeRow } from "./PreviewChromeRow";
 import { PreviewEmptyState } from "./PreviewEmptyState";
+import { PreviewExtensionsMenu } from "./PreviewExtensionsMenu";
 import { PreviewMoreMenu, type PreviewMoreMenuActions } from "./PreviewMoreMenu";
 import {
   commitBrowserViewportChange,
@@ -64,15 +69,21 @@ import { BrowserSettingsReadError } from "~/browser/openFileInPreview";
 import { PreviewUnreachable } from "./PreviewUnreachable";
 import { revealInFileExplorerLabel } from "./fileExplorerLabel";
 import { shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
+import { Button } from "~/components/ui/button";
 import { Badge } from "~/components/ui/badge";
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
 import { useRendersServerTabNatively } from "~/browser/previewRuntime";
 import { ServerBrowserSurface, type ServerBrowserHandle } from "~/browser/ServerBrowserSurface";
+import {
+  managedOwnerUnavailableMessage,
+  useManagedStreamTarget,
+} from "~/browser/managedStreamTarget";
 import { cn } from "~/lib/utils";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 import { usePreviewSession } from "./usePreviewSession";
 import { ZoomIndicator } from "./ZoomIndicator";
 import { AgentBrowserCursor } from "./AgentBrowserCursor";
+import { focusedPreviewWebview, PreviewFindBar } from "./PreviewFindBar";
 import {
   findActiveBrowserRecordingRuntimeTabId,
   isBrowserRecordingStartCancelledError,
@@ -88,6 +99,7 @@ interface Props {
   tabId?: string | null;
   configuredUrls?: ReadonlyArray<string> | undefined;
   visible: boolean;
+  surfaceZIndex?: number;
   onSendAnnotation?: (
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
@@ -113,6 +125,7 @@ export function PreviewView({
   configuredUrls,
   visible,
   onSendAnnotation,
+  surfaceZIndex,
 }: Props) {
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
   const [pickActive, setPickActive] = useState(false);
@@ -155,7 +168,7 @@ export function PreviewView({
 
   const tabId = requestedTabId ?? previewState.activeTabId;
   const runtimeTabId = tabId
-    ? previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId)
+    ? previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId, previewState.sessions[tabId]?.managed)
     : null;
   const recordingRuntimeTabId =
     tabId && runtimeTabId
@@ -163,7 +176,31 @@ export function PreviewView({
         ? runtimeTabId
         : findActiveBrowserRecordingRuntimeTabId(threadRef, tabId)
       : null;
-  const snapshot = tabId ? (previewState.sessions[tabId] ?? null) : null;
+  const chatSnapshot = tabId ? (previewState.sessions[tabId] ?? null) : null;
+  const attachment = chatSnapshot?.managed;
+  const ownerState = useThreadPreviewState(attachment?.remote ? {
+    environmentId: attachment.ownerEnvironmentId, threadId: ThreadId.make(attachment.hostThreadId),
+  } : null);
+  const ownerSnapshot = attachment?.remote ? Object.values(ownerState.sessions).find((candidate) =>
+    candidate.managed?.ownerEnvironmentId === attachment.ownerEnvironmentId &&
+    !candidate.managed.remote && candidate.managed.native &&
+    candidate.managed.instanceId === attachment.instanceId && candidate.managed.profileId === attachment.profileId &&
+    candidate.managed.engineTabId === attachment.engineTabId) : null;
+  const recoveredOwner = ownerSnapshot?.managed;
+  useEffect(() => {
+    if (!attachment?.remote || !recoveredOwner ||
+      (attachment.incarnation === recoveredOwner.incarnation && attachment.hostTabId === recoveredOwner.hostTabId)) return;
+    void open({ environmentId: threadRef.environmentId, input: { threadId: threadRef.threadId,
+      managedAttachment: { ...recoveredOwner, remote: true }, runtime: "server" } });
+  }, [attachment?.incarnation, attachment?.hostTabId, attachment?.remote, recoveredOwner?.incarnation, recoveredOwner?.hostTabId, open, threadRef.environmentId, threadRef.threadId]);
+  const snapshot = ownerSnapshot && chatSnapshot && confirmsManagedOwner(attachment, ownerSnapshot.managed)
+    ? { ...ownerSnapshot, threadId: chatSnapshot.threadId, tabId: chatSnapshot.tabId, managed: attachment }
+    : chatSnapshot;
+  // A shared browser another environment owns is watched on its owner, not through this chat's server.
+  const stream = useManagedStreamTarget(
+    snapshot ?? { threadId: threadRef.threadId, tabId: tabId ?? "" },
+    threadRef.environmentId,
+  );
   // Server tabs run in the environment's browser and stream to any client, except the
   // desktop app's own server's tabs, which render here natively while the server drives them.
   const nativeServerTab = useRendersServerTabNatively(threadRef.environmentId, snapshot);
@@ -189,7 +226,7 @@ export function PreviewView({
   const [serverControlledTabId, setServerControlledTabId] = useState<string | null>(null);
   const serverInputDisabled = isServerTab && serverControlledTabId !== runtimeTabId;
   const [serverFrameTabId, setServerFrameTabId] = useState<string | null>(null);
-  const desktopOverlay = tabId ? (previewState.desktopByTabId[tabId] ?? null) : null;
+  const desktopOverlay = attachment?.remote ? (ownerState.desktopByTabId[attachment.hostTabId] ?? null) : tabId ? (previewState.desktopByTabId[tabId] ?? null) : null;
   const navStatus = snapshot?.navStatus ?? { _tag: "Idle" as const };
   const url = navStatus._tag === "Idle" ? "" : navStatus.url;
   const loading = desktopOverlay?.loading ?? navStatus._tag === "Loading";
@@ -274,18 +311,17 @@ export function PreviewView({
     async (next: string) => {
       try {
         // A server tab's browser runs on the environment, where loopback is already right.
-        const resolved =
-          isServerTab || !previewBridge
-            ? normalizePreviewUrl(next)
-            : resolveDiscoveredServerUrl(threadRef.environmentId, next);
+        const resolved = snapshot?.managed
+          ? resolveDiscoveredServerUrlForBrowser(threadRef.environmentId, snapshot.managed.ownerEnvironmentId, next)
+          : isServerTab || !previewBridge ? normalizePreviewUrl(next) : resolveDiscoveredServerUrl(threadRef.environmentId, next);
         if (await navigateToResolvedUrl(resolved)) {
           recordVisitForThread(threadRef, next);
         }
-      } catch {
-        // Server-side `failed` event renders the unreachable view.
+      } catch (error) {
+        toastManager.add({ type: "error", title: "Unable to reach the development server", description: error instanceof Error ? error.message : "Configure forwarding to the chat host." });
       }
     },
-    [isServerTab, navigateToResolvedUrl, threadRef],
+    [isServerTab, navigateToResolvedUrl, snapshot?.managed, threadRef],
   );
 
   const handleRefresh = useCallback(() => {
@@ -298,8 +334,8 @@ export function PreviewView({
     async (change: Omit<PreviewAdjustInput, "threadId" | "tabId">) => {
       if (!tabId) return;
       const result = await adjust({
-        environmentId: threadRef.environmentId,
-        input: { threadId: threadRef.threadId, tabId, ...change },
+        environmentId: stream.target.environmentId,
+        input: { threadId: ThreadId.make(stream.target.threadId), tabId: stream.target.tabId, ...change },
       });
       if (result._tag === "Failure") {
         const error = squashAtomCommandFailure(result);
@@ -310,9 +346,9 @@ export function PreviewView({
         });
         return;
       }
-      updatePreviewServerSnapshot(threadRef, result.value);
+      updatePreviewServerSnapshot({ environmentId: stream.target.environmentId, threadId: ThreadId.make(stream.target.threadId) }, result.value);
     },
-    [adjust, tabId, threadRef],
+    [adjust, tabId, stream.target.environmentId, stream.target.threadId, stream.target.tabId],
   );
 
   const serverZoomFactor = snapshot?.zoomFactor ?? DEFAULT_PREVIEW_ZOOM_FACTOR;
@@ -352,10 +388,10 @@ export function PreviewView({
     async (nextViewport: PreviewViewportSetting) => {
       if (!tabId) return;
       const result = await resize({
-        environmentId: threadRef.environmentId,
+        environmentId: stream.target.environmentId,
         input: {
-          threadId: threadRef.threadId,
-          tabId,
+          threadId: ThreadId.make(stream.target.threadId),
+          tabId: stream.target.tabId,
           viewport: nextViewport,
         },
       });
@@ -368,9 +404,9 @@ export function PreviewView({
         });
         throw error;
       }
-      updatePreviewServerSnapshot(threadRef, result.value);
+      updatePreviewServerSnapshot({ environmentId: stream.target.environmentId, threadId: ThreadId.make(stream.target.threadId) }, result.value);
     },
-    [resize, tabId, threadRef],
+    [resize, tabId, stream.target.environmentId, stream.target.threadId, stream.target.tabId],
   );
 
   const handleToggleDeviceToolbar = () => {
@@ -855,6 +891,21 @@ export function PreviewView({
     };
   }, [runtimeTabId]);
 
+  // Cmd+F in the page: the desktop app sends it here only from the page that holds the keys.
+  const [findWebview, setFindWebview] = useState<ReturnType<typeof focusedPreviewWebview>>(null);
+  useEffect(() => {
+    if (!runtimeTabId) return;
+    const unsubscribe = window.desktopBridge?.onMenuAction((action) => {
+      if (action !== "preview.find") return;
+      const webview = focusedPreviewWebview(runtimeTabId);
+      if (webview) setFindWebview(webview);
+    });
+    return () => {
+      unsubscribe?.();
+      setFindWebview(null);
+    };
+  }, [runtimeTabId]);
+
   // Subscribe only while visible; `toggle-panel` is owned by ChatView's
   // URL-aware handler regardless of whether the panel is currently mounted.
   useEffect(() => {
@@ -942,13 +993,31 @@ export function PreviewView({
           ) : null
         }
         trailingActions={
-          moreMenuActions ? (
+          <>
+            {runtimeTabId && !isServerTab ? (
+              <PreviewExtensionsMenu
+                tabId={runtimeTabId}
+                url={url}
+                enabled={nativeServerTab || (desktopOverlay?.hasWebContents ?? false)}
+              />
+            ) : null}
+            {moreMenuActions ? (
             <PreviewMoreMenu
               enabled={
                 runtimeTabId !== null &&
                 (serverOwnsRendering || (desktopOverlay?.hasWebContents ?? false))
               }
               actions={moreMenuActions}
+              browserKind={snapshot?.managed ? "managed" : "standard"}
+              onSwitchBrowser={() => {
+                void openPreviewSession({ openPreview: open, threadRef, standardBrowser: Boolean(snapshot?.managed) }).then((result) => {
+                  if (result._tag === "Success") useRightPanelStore.getState().openBrowser(threadRef, result.value.tabId);
+                  else {
+                    const error = squashAtomCommandFailure(result);
+                    toastManager.add({ type: "error", title: "Unable to open browser", description: error instanceof Error ? error.message : "The browser is unavailable." });
+                  }
+                });
+              }}
               profileName={activeProfileName}
               zoomFactor={
                 serverOwnsRendering ? serverZoomFactor : (desktopOverlay?.zoomFactor ?? 1)
@@ -962,9 +1031,18 @@ export function PreviewView({
               onToggleDeviceToolbar={handleToggleDeviceToolbar}
               nativePictureInPicture={desktopOverlay?.pictureInPicture ?? false}
             />
-          ) : null
+            ) : null}
+          </>
         }
       />
+
+      {findWebview ? <PreviewFindBar webview={findWebview} onClose={() => setFindWebview(null)} /> : null}
+
+      {snapshot?.managed ? <ManagedThreadBrowserEnrollment threadRef={threadRef} binding={{
+        ownerEnvironmentId: snapshot.managed.ownerEnvironmentId,
+        instanceId: snapshot.managed.instanceId,
+        profileId: snapshot.managed.profileId,
+      }} /> : null}
 
       <div ref={serverBodyRef} className="relative min-h-0 flex-1 overflow-hidden">
         {runtimeTabId && snapshot && isServerTab ? (
@@ -987,10 +1065,10 @@ export function PreviewView({
               <ServerBrowserSurface
                 key={runtimeTabId}
                 ref={serverSurfaceRef}
-                environmentId={threadRef.environmentId}
-                threadId={threadRef.threadId}
-                tabId={snapshot.tabId}
-                visible={visible}
+                environmentId={stream.target.environmentId}
+                threadId={stream.target.threadId}
+                tabId={stream.target.tabId}
+                visible={visible && stream.ready}
                 onFirstFrame={() => setServerFrameTabId(runtimeTabId)}
                 onControl={(control) =>
                   setServerControlledTabId(control?.controller === "you" ? runtimeTabId : null)
@@ -1001,16 +1079,31 @@ export function PreviewView({
                   (showEmptyState || isUnreachable) && "invisible",
                 )}
               />
+              {stream.ready ? null : (
+                <div
+                  role="status"
+                  className="absolute inset-0 flex items-center justify-center bg-background p-6 text-center text-sm text-muted-foreground"
+                >
+                  {managedOwnerUnavailableMessage(stream.ownerLabel)}
+                </div>
+              )}
             </div>
           </>
         ) : runtimeTabId && snapshot && !showEmptyState ? (
           previewBridge ? (
-            <BrowserSurfaceSlot
-              key={runtimeTabId}
-              tabId={runtimeTabId}
-              visible={visible && !isUnreachable}
-              className="absolute inset-0 h-full w-full"
-            />
+            <div className="absolute inset-0 flex flex-col">
+              {snapshot.managed?.native ? <ManagedNativeControl environmentId={snapshot.managed.ownerEnvironmentId} managed={snapshot.managed} /> : null}
+              <div className="relative min-h-0 flex-1">
+                <BrowserSurfaceSlot key={runtimeTabId} tabId={runtimeTabId} {...(surfaceZIndex === undefined ? {} : { zIndex: surfaceZIndex })} visible={visible && !isUnreachable} className="absolute inset-0" />
+                {desktopOverlay && !isUnreachable && !activeRecordingTabIds.has(runtimeTabId) ? (
+                  <AgentBrowserCursor
+                    tabId={runtimeTabId}
+                    zoomFactor={desktopOverlay.zoomFactor}
+                    controller={controller}
+                  />
+                ) : null}
+              </div>
+            </div>
           ) : (
             <div className="flex h-full items-center justify-center p-8 text-center">
               <p className="max-w-sm text-sm text-muted-foreground">
@@ -1031,17 +1124,6 @@ export function PreviewView({
         ) : null}
         {snapshot && desktopOverlay ? (
           <ZoomIndicator zoomFactor={desktopOverlay.zoomFactor} />
-        ) : null}
-        {runtimeTabId &&
-        desktopOverlay &&
-        !showEmptyState &&
-        !isUnreachable &&
-        !activeRecordingTabIds.has(runtimeTabId) ? (
-          <AgentBrowserCursor
-            tabId={runtimeTabId}
-            zoomFactor={desktopOverlay.zoomFactor}
-            controller={controller}
-          />
         ) : null}
         {navStatus._tag === "LoadFailed" ? (
           <div className="absolute inset-0 z-10 bg-background">

@@ -1,0 +1,31 @@
+{
+  "hello": {
+    "protocolVersion": 1,
+    "kind": "request",
+    "requestId": "hello:1",
+    "deadlineMs": 2000000000000,
+    "method": "hello",
+    "params": {
+      "protocolVersion": 1,
+      "adapterVersion": "1.0.0"
+    }
+  },
+  "identity": {
+    "resource": {
+      "instanceId": "browser:1%",
+      "profileId": "profile:1%"
+    },
+    "caller": {
+      "environmentId": "env:1",
+      "threadId": "thread:1",
+      "agentSessionId": "session:1"
+    }
+  },
+  "limits": {
+    "messageBytes": 1048576,
+    "chunkBytes": 262144,
+    "outstanding": 128,
+    "unacknowledgedFrames": 2,
+    "subscriptions": 16
+  }
+}

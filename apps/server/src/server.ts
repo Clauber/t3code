@@ -63,6 +63,8 @@ import * as DeviceService from "./device/DeviceService.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as ManagedBrowserRoutes from "./browser/ManagedBrowserRoutes.ts";
+import * as ManagedBrowserRuntime from "./browser/ManagedBrowserRuntime.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
@@ -674,6 +676,8 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerAttachmentUploadRoute,
     DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
+    // Grants, enrollments and calls between environments' managed browsers: nothing is reachable until an administrator adds a grant.
+    ManagedBrowserRoutes.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
   ),
@@ -691,11 +695,25 @@ const layerMakeRoutes = Layer.mergeAll(
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(layerPullRequestService),
   // The stream route and the WebSocket RPCs share one browser.
-  Layer.provide(ServerBrowser.layer.pipe(Layer.provide(DesktopBrowserChannel.layer))),
+  Layer.provide(
+    ServerBrowser.layer.pipe(
+      // Named browser sessions: the managed browser when one is configured, otherwise a refusal by name.
+      Layer.provide(ManagedBrowserRuntime.layer),
+      Layer.provide(DesktopBrowserChannel.layer),
+    ),
+  ),
+  // One managed browser runtime for the preview browser and the routes beside it.
+  Layer.provide(ManagedBrowserRuntime.layer),
   // Server browser tabs and HTML render previews install and run the same headless browser.
   Layer.provide(PreviewBrowser.layer),
   Layer.provide(PreviewAutomationBroker.layer),
-  Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
+  // A restart for an update must not end a managed browser that is in use, so it sees the browser's drain gate.
+  Layer.provide(
+    ServerSelfUpdate.layer.pipe(
+      Layer.provide(layerDesktopAppUpdate),
+      Layer.provide(ManagedBrowserRuntime.layer),
+    ),
+  ),
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),
   Layer.provide(ServerHttp.layerHttpCompression),

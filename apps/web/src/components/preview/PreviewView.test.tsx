@@ -235,14 +235,19 @@ vi.mock("./PreviewChromeRow", () => ({
     onPictureInPicture?: () => void;
     pictureInPicture?: boolean;
     trailingActions?: {
-      props: { actions?: { toggleNativePictureInPicture?: () => void } };
+      props: {
+        children?: ReadonlyArray<{
+          props?: { actions?: { toggleNativePictureInPicture?: () => void } };
+        } | null>;
+      };
     };
   }) => {
     mocks.submittedUrl = props.onSubmit;
     mocks.toggleAnnotation = props.onPickElement ?? null;
     mocks.togglePictureInPicture = props.onPictureInPicture ?? null;
     mocks.toggleNativePictureInPicture =
-      props.trailingActions?.props.actions?.toggleNativePictureInPicture ?? null;
+      props.trailingActions?.props.children?.find((child) => child?.props?.actions)?.props?.actions
+        ?.toggleNativePictureInPicture ?? null;
     mocks.pictureInPicturePressed = props.pictureInPicture ?? false;
     return null;
   },

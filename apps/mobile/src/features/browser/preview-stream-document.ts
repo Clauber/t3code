@@ -4,6 +4,7 @@ import type {
   PreviewStreamControl,
   PreviewStreamDownload,
   PreviewStreamFileChooser,
+  PreviewStreamSurface,
 } from "@t3tools/client-runtime/preview/server-browser-stream";
 
 export interface PreviewStreamConfiguration {
@@ -13,6 +14,8 @@ export interface PreviewStreamConfiguration {
   /** Taps, scrolls, keys, and `resize` to the view size. The floating player only watches. */
   readonly interactive: boolean;
   readonly background: string;
+  /** Names this viewer across reconnects, so control held for it is its to resume. */
+  readonly viewerKey: string;
 }
 
 /** Messages the WebView document posts to the native view. */
@@ -23,6 +26,7 @@ export type PreviewStreamMessage =
       readonly status: "connecting" | "streaming" | "error";
       readonly detail?: string;
     }
+  | ({ readonly type: "surface" } & PreviewStreamSurface)
   | { readonly type: "unauthorized" }
   | { readonly type: "gone" }
   | ({ readonly type: "hostSetup" } & PreviewStreamHostSetup)

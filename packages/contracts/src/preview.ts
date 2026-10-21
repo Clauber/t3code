@@ -9,8 +9,20 @@
  * @module Preview
  */
 import { Schema } from "effect";
-import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
+import {
+  ManagedBrowserIncarnation,
+  ManagedBrowserInstanceId,
+  ManagedBrowserProfileId,
+  ManagedBrowserTabId,
+} from "./managedBrowser.ts";
 
 export const PREVIEW_URL_MAX_LENGTH = 2_048;
 export const CONFIGURED_LOCAL_SERVER_URLS_MAX_ITEMS = 32;
@@ -185,6 +197,28 @@ export const PreviewStreamHostSetup = Schema.Struct({
 export type PreviewStreamHostSetup = typeof PreviewStreamHostSetup.Type;
 export const PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE = 4503;
 
+/**
+ * Where a managed session's page really lives, so a client can watch it on the environment that owns
+ * it. `hostThreadId` and `hostTabId` name the session on that environment (they differ from this one's
+ * when the browser is another environment's); a viewer connects to the owner with its own prepared
+ * connection and asks for that tab. Nothing here is a credential.
+ */
+export const PreviewManagedSession = Schema.Struct({
+  ownerEnvironmentId: EnvironmentId,
+  instanceId: ManagedBrowserInstanceId,
+  profileId: ManagedBrowserProfileId,
+  incarnation: ManagedBrowserIncarnation,
+  /** The browser's id for the page, identical for every thread that shares it. */
+  engineTabId: ManagedBrowserTabId,
+  hostThreadId: TrimmedNonEmptyString,
+  hostTabId: PreviewTabId,
+  shared: Schema.Boolean,
+  native: Schema.optional(Schema.Boolean),
+  /** Whether the owner is another environment, so the page is not served from this server. */
+  remote: Schema.Boolean,
+});
+export type PreviewManagedSession = typeof PreviewManagedSession.Type;
+
 export const PreviewSessionSnapshot = Schema.Struct({
   threadId: TrimmedNonEmptyString,
   tabId: PreviewTabId,
@@ -206,6 +240,8 @@ export const PreviewSessionSnapshot = Schema.Struct({
   runtime: Schema.optional(PreviewRuntime),
   /** Authenticated provider session owning an isolated server tab. */
   automationOwner: Schema.optional(Schema.String),
+  /** Named managed-browser sessions only: which environment holds the page and under which ids. */
+  managed: Schema.optional(PreviewManagedSession),
   /** An agent opened this tab and asked to show it, so viewers float it. */
   reveal: Schema.optional(Schema.Boolean),
   /** A fresh presentation request, including whether it overrides automatic-floating settings. */
@@ -215,6 +251,10 @@ export const PreviewSessionSnapshot = Schema.Struct({
 export type PreviewSessionSnapshot = typeof PreviewSessionSnapshot.Type;
 
 export const PreviewOpenInput = Schema.Struct({
+  /** Human-selected managed tab; a pointer, never a grant to operate it. */
+  managedAttachment: Schema.optional(PreviewManagedSession),
+  /** Explicitly select the ordinary browser and clear a saved managed default. */
+  standardBrowser: Schema.optional(Schema.Boolean),
   threadId: ThreadId,
   /** Omit to create an empty (Idle) tab the user can type into. */
   url: Schema.optional(Url),
@@ -434,7 +474,12 @@ export class PreviewClearProfileError extends Schema.TaggedError<PreviewClearPro
   }
 }
 
+export class PreviewManagedBrowserError extends Schema.TaggedError<PreviewManagedBrowserError>()(
+  "PreviewManagedBrowserError", { message: Schema.String },
+) {}
+
 export const PreviewError = Schema.Union([
+  PreviewManagedBrowserError,
   PreviewSessionLookupError,
   PreviewInvalidUrlError,
   PreviewControlRequiredError,

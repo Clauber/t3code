@@ -43,10 +43,13 @@ it("exports provider-compatible object schemas with described parameters", () =>
     if (tool.name === "preview_navigate") {
       expect(schemaHasMultipleAllOfDescriptions(schema)).toBe(false);
     }
-    expect(
-      schema.properties?.tabId,
-      `${tool.name} must allow an explicit collaborative browser tab target`,
-    ).toBeDefined();
+    // Listing shared tabs names a browser, not a tab: it exists to find the ids a tab target needs.
+    if (tool.name !== "preview_shared_tabs") {
+      expect(
+        schema.properties?.tabId,
+        `${tool.name} must allow an explicit collaborative browser tab target`,
+      ).toBeDefined();
+    }
     for (const [field, fieldSchema] of Object.entries(schema.properties ?? {})) {
       expect(
         schemaHasDescription(fieldSchema),
@@ -77,4 +80,52 @@ it("exports exact object result schemas for preview actions", () => {
       description: "The preview action completed successfully.",
     });
   }
+});
+
+it("offers preview_open a named browser binding that names owner, instance and profile", () => {
+  const schema = Tool.getJsonSchema(PreviewToolkit.tools.preview_open) as {
+    readonly properties?: Readonly<Record<string, unknown>>;
+  };
+  // An optional field is exported as the object or null.
+  const binding = (
+    schema.properties?.browserBinding as {
+      readonly anyOf?: ReadonlyArray<{
+        readonly properties?: Readonly<Record<string, unknown>>;
+        readonly required?: ReadonlyArray<string>;
+      }>;
+    }
+  )?.anyOf?.[0];
+  expect(binding).toBeDefined();
+  expect(Object.keys(binding?.properties ?? {}).sort()).toEqual([
+    "instanceId",
+    "ownerEnvironmentId",
+    "profileId",
+  ]);
+  expect([...(binding?.required ?? [])].sort()).toEqual([
+    "instanceId",
+    "ownerEnvironmentId",
+    "profileId",
+  ]);
+  // Sharing and joining a managed tab are explicit fields of the open, described for the agent.
+  expect(Object.keys(schema.properties ?? {})).toEqual(
+    expect.arrayContaining(["shareTab", "joinTab"]),
+  );
+  // Only an open, and the listing of what is shared to join, can name a browser; no other tool takes the field.
+  for (const [name, tool] of Object.entries(PreviewToolkit.tools)) {
+    if (name === "preview_open" || name === "preview_shared_tabs") continue;
+    const other = Tool.getJsonSchema(tool) as {
+      readonly properties?: Readonly<Record<string, unknown>>;
+    };
+    expect(other.properties?.browserBinding, name).toBeUndefined();
+  }
+});
+
+it("offers preview_shared_tabs only a browser binding, read-only", () => {
+  const tool = PreviewToolkit.tools.preview_shared_tabs;
+  const schema = Tool.getJsonSchema(tool) as {
+    readonly properties?: Readonly<Record<string, unknown>>;
+    readonly required?: ReadonlyArray<string>;
+  };
+  expect(Object.keys(schema.properties ?? {})).toEqual(["browserBinding"]);
+  expect(schema.required).toEqual(["browserBinding"]);
 });

@@ -1,5 +1,6 @@
 import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequest";
 import {
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE,
@@ -42,6 +43,12 @@ const intParam = (params: URLSearchParams, name: string, fallback: number, max: 
 const isAck = (message: unknown) =>
   typeof message === "object" && message !== null && "type" in message && message.type === "ack";
 
+const isSurfaceChoice = (message: unknown) =>
+  typeof message === "object" &&
+  message !== null &&
+  "type" in message &&
+  message.type === "surface";
+
 const parseMessage = (chunk: Uint8Array | string): unknown => {
   try {
     return JSON.parse(typeof chunk === "string" ? chunk : textDecoder.decode(chunk));
@@ -76,6 +83,8 @@ const makeHandler = (browser: ServerBrowser.ServerBrowser["Service"]) =>
       params.get("interactive") !== "false";
     const threadId = params.get("threadId") ?? "";
     const tabId = params.get("tabId") ?? "";
+    // The client's own name for this viewer across reconnects; the browser checks its shape and binds it to the session.
+    const viewerKey = params.get("viewerKey")?.slice(0, 128) || undefined;
     if (threadId.length === 0 || tabId.length === 0) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
@@ -86,6 +95,13 @@ const makeHandler = (browser: ServerBrowser.ServerBrowser["Service"]) =>
             threadId,
             tabId,
             canOperate,
+            // A managed profile holds real logins: it is shown to the session named by a grant, or to
+            // an administrator, not to every session that can read previews.
+            viewer: {
+              sessionId: session.sessionId,
+              administrator: session.scopes.includes(AuthAccessWriteScope),
+            },
+            ...(viewerKey === undefined ? {} : { viewerKey }),
             maxWidth: intParam(params, "maxWidth", 1280, 7680),
             maxHeight: intParam(params, "maxHeight", 800, 4320),
             quality: intParam(params, "quality", DEFAULT_QUALITY, 100),
@@ -151,12 +167,14 @@ const makeHandler = (browser: ServerBrowser.ServerBrowser["Service"]) =>
                   Effect.andThen(Effect.sync(() => unacknowledged.push(output.ack))),
                 );
               case "viewport":
+              case "surface":
               case "control":
               case "clipboard":
               case "download":
               case "fileChooser":
               case "fileChooserClosed":
               case "pointer":
+              case "rejected":
               case "probe": {
                 const { _tag: type, ...data } = output;
                 return write(JSON.stringify({ type, ...data }));
@@ -175,7 +193,8 @@ const makeHandler = (browser: ServerBrowser.ServerBrowser["Service"]) =>
           // Ownership serializes actions in the service. Keep reading so dialog
           // replies and takeover can unblock an action already waiting on the page.
           if (!isAck(message))
-            return canOperate
+            // Choosing what to watch is not an action in the page, so a viewer that cannot act may still do it.
+            return canOperate || isSurfaceChoice(message)
               ? viewer.input(message).pipe(Effect.forkScoped, Effect.asVoid)
               : Effect.void;
           const ack = unacknowledged.shift();
@@ -213,11 +232,15 @@ const encodeHostSetup = Schema.encodeSync(Schema.fromJsonString(PreviewStreamHos
 /** `GET /api/preview-stream/download?threadId&tabId&id`: a file a server tab downloaded. */
 const serveDownload = (browser: ServerBrowser.ServerBrowser["Service"], params: URLSearchParams) =>
   Effect.gen(function* () {
-    yield* authenticateMediaRequest(AuthOrchestrationReadScope);
+    const session = yield* authenticateMediaRequest(AuthOrchestrationReadScope);
     const download = yield* browser.openDownload({
       threadId: params.get("threadId") ?? "",
       tabId: params.get("tabId") ?? "",
       downloadId: params.get("id") ?? "",
+      viewer: {
+        sessionId: session.sessionId,
+        administrator: session.scopes.includes(AuthAccessWriteScope),
+      },
     });
     if (Option.isNone(download)) return HttpServerResponse.text("Not Found", { status: 404 });
     return yield* HttpServerResponse.file(download.value.path, {

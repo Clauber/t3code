@@ -15,6 +15,7 @@ import {
   resolveBrowserDefaults,
 } from "~/browser/browserDefaults";
 import { BrowserSettingsReadError } from "~/browser/openFileInPreview";
+import { openManagedThreadBrowser } from "~/browser/openManagedThreadBrowser";
 import { previewRuntimeFor } from "~/browser/previewRuntime";
 import { applyPreviewServerSnapshot, rememberPreviewUrl } from "~/previewStateStore";
 
@@ -29,6 +30,7 @@ interface OpenPreviewSessionInput<E> {
   viewport?: PreviewViewportSetting;
   /** Overrides the configured default profile. */
   profileId?: string;
+  standardBrowser?: boolean;
 }
 
 export async function openPreviewSession<E>(
@@ -42,11 +44,22 @@ export async function openPreviewSession<E>(
   if (defaults instanceof BrowserSettingsReadError) {
     return AsyncResult.failure(Cause.fail(defaults));
   }
+  const managed = input.standardBrowser
+    ? null
+    : await openManagedThreadBrowser({
+        threadRef: input.threadRef,
+        ...(input.url === undefined ? {} : { url: input.url }),
+        ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
+        defaultProfileId: browserDefaultOpenProfileId(defaults),
+      }).catch((error: BrowserSettingsReadError) => error);
+  if (managed instanceof BrowserSettingsReadError) return AsyncResult.failure(Cause.fail(managed));
   const runtime = previewRuntimeFor(input.threadRef.environmentId);
   const result = await input.openPreview({
     environmentId: input.threadRef.environmentId,
     input: {
       threadId: input.threadRef.threadId,
+      ...(managed ? { managedAttachment: managed } : {}),
+      ...(input.standardBrowser ? { standardBrowser: true } : {}),
       ...(input.url === undefined ? {} : { url: input.url }),
       viewport: input.viewport ?? browserDefaultOpenViewport(defaults),
       profileId: input.profileId ?? browserDefaultOpenProfileId(defaults),

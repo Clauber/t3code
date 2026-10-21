@@ -178,9 +178,11 @@ export function start(configuration: PreviewStreamConfiguration) {
         maxWidth: cap.width,
         maxHeight: cap.height,
         interactive,
+        viewerKey: configuration.viewerKey,
       },
       {
         onFrame: (jpeg) => painter.paint(jpeg),
+        onSurface: (surface) => post({ type: "surface", ...surface }),
         onPointer: showAgentCursor,
         onClipboard: (text) => post({ type: "clipboard", text }),
         onDownload: (download) => post({ type: "download", ...download }),

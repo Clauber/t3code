@@ -1,9 +1,10 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { type PreviewEvent, ThreadId } from "@t3tools/contracts";
+import { type PreviewEvent, PreviewManagedSession, ManagedBrowserIncarnation, ThreadId } from "@t3tools/contracts";
 import { PreviewUrlNormalizationError } from "@t3tools/shared/preview";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import { expect } from "vite-plus/test";
@@ -47,6 +48,24 @@ const layer = PreviewManager.layer.pipe(
 );
 
 it.layer(layer)("PreviewManager", (it) => {
+  it.effect("keeps a recovered managed attachment on the same chat surface", () => Effect.gen(function* () {
+    const manager = yield* PreviewManager.PreviewManager;
+    const threadId = freshThreadId();
+    const managed = yield* Schema.decodeUnknownEffect(PreviewManagedSession)({
+      ownerEnvironmentId: "mac", instanceId: "default", profileId: "default", engineTabId: "page", incarnation: "boot-one",
+      hostThreadId: "owner-thread", hostTabId: "owner-tab-one", shared: true, native: true, remote: true,
+    });
+    const first = yield* manager.open({ threadId, managedAttachment: managed });
+    expect(first.runtime).toBe("server");
+    const next = yield* manager.open({ threadId, managedAttachment: { ...managed, incarnation: ManagedBrowserIncarnation.make("boot-two"), hostTabId: "owner-tab-two" } });
+    expect(next.tabId).toBe(first.tabId);
+    const listed = yield* manager.list({ threadId });
+    expect(listed.sessions).toHaveLength(1);
+    expect(listed.sessions[0]?.managed?.hostTabId).toBe("owner-tab-two");
+    yield* manager.close({ threadId, tabId: first.tabId });
+    expect((yield* manager.list({ threadId })).sessions).toHaveLength(0);
+  }));
+
   it.effect("opens a session and emits opened with normalized URL", () =>
     Effect.gen(function* () {
       const threadId = freshThreadId();

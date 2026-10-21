@@ -94,6 +94,8 @@ export default defineConfig({
       "pnpm-lock.yaml",
       "*.tsbuildinfo",
       "**/routeTree.gen.ts",
+      // Vendored engine protocol assets: their digests are recorded in PROVENANCE.json.
+      "apps/server/src/browser/engine-contract/**",
       "apps/mobile/android/**",
       "apps/mobile/ios/**",
       "apps/mobile/uniwind-types.d.ts",

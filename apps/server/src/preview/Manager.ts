@@ -14,8 +14,10 @@ import {
   type PreviewEvent,
   type PreviewError,
   PreviewInvalidUrlError,
+  PreviewManagedBrowserError,
   type PreviewListInput,
   type PreviewListResult,
+  type PreviewManagedSession,
   type PreviewNavigateInput,
   type PreviewOpenInput,
   type PreviewRefreshInput,
@@ -38,6 +40,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
+import * as Option from "effect/Option";
+import * as ServerConfig from "../config.ts";
+import { readThreadAttachment, writeThreadAttachment } from "../browser/ManagedBrowserThreadAttachment.ts";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { PreviewControlRequiredError } from "@t3tools/contracts";
@@ -48,6 +53,8 @@ export class PreviewManager extends Context.Service<
     readonly open: (
       input: PreviewOpenInput & {
         readonly automationOwner?: string;
+        /** Named managed-browser sessions: where the page lives, for clients that watch it. */
+        readonly managed?: PreviewManagedSession | ((tabId: string) => PreviewManagedSession);
         /** Runs before the `opened` event publishes, so subscribers find state keyed by the tab. */
         readonly beforePublish?: (snapshot: PreviewSessionSnapshot) => void;
       },
@@ -56,7 +63,11 @@ export class PreviewManager extends Context.Service<
       input: PreviewNavigateInput,
     ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
     readonly reportStatus: (
-      input: PreviewReportStatusInput & { readonly serverControlled?: boolean },
+      input: PreviewReportStatusInput & {
+        readonly serverControlled?: boolean;
+        /** Managed sessions: where the page lives, kept current as the browser restarts or sharing changes. */
+        readonly managed?: PreviewManagedSession;
+      },
     ) => Effect.Effect<void, PreviewError>;
     readonly requestReveal: (
       input: PreviewCloseInput & { readonly tabId: string; readonly force: boolean },
@@ -74,7 +85,7 @@ export class PreviewManager extends Context.Service<
     ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
     readonly refresh: (input: PreviewRefreshInput) => Effect.Effect<void, PreviewError>;
     readonly close: (input: PreviewCloseInput) => Effect.Effect<void, PreviewError>;
-    readonly list: (input: PreviewListInput) => Effect.Effect<PreviewListResult>;
+    readonly list: (input: PreviewListInput) => Effect.Effect<PreviewListResult, PreviewManagedBrowserError>;
     readonly events: Stream.Stream<PreviewEvent>;
     readonly subscribeEvents: Effect.Effect<PubSub.Subscription<PreviewEvent>, never, Scope.Scope>;
   }
@@ -140,6 +151,8 @@ const currentIsoTimestamp = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* PreviewManagerMake() {
   const crypto = yield* Crypto.Crypto;
+  const config = Option.getOrUndefined(yield* Effect.serviceOption(ServerConfig.ServerConfig));
+  const restoredAttachments = new Set<string>();
   const serverEpoch = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
   const stateRef = yield* SynchronizedRef.make<ManagerState>(initialState);
   // Unbounded PubSub is fine here — events are tiny and we don't want to
@@ -206,7 +219,30 @@ export const make = Effect.gen(function* PreviewManagerMake() {
 
   const open: PreviewManager["Service"]["open"] = Effect.fn("PreviewManager.open")(
     function* (input) {
-      const runtime = input.runtime;
+      const runtime = input.managedAttachment ? "server" : input.runtime;
+      if (config && (input.managedAttachment || input.standardBrowser)) {
+        yield* Effect.try({
+          try: () => writeThreadAttachment(config.stateDir, input.threadId, input.managedAttachment ?? null),
+          catch: () => new PreviewManagedBrowserError({ message: "The browser selection could not be saved. No ordinary browser was substituted." }),
+        });
+        restoredAttachments.add(input.threadId);
+      }
+      const managed = input.managedAttachment ? { ...input.managedAttachment, remote: true } : input.managed;
+      if (input.managedAttachment) {
+        const attachment = input.managedAttachment;
+        const current = yield* SynchronizedRef.get(stateRef);
+        const existing = sessionsForThread(current, input.threadId).find(({ snapshot }) =>
+          snapshot.managed?.engineTabId === attachment.engineTabId &&
+          snapshot.managed.instanceId === attachment.instanceId &&
+          snapshot.managed.profileId === attachment.profileId &&
+          snapshot.managed.ownerEnvironmentId === attachment.ownerEnvironmentId);
+        if (existing) {
+          const next = { ...existing.snapshot, managed: { ...attachment, remote: true } };
+          yield* reportStatus({ threadId: input.threadId, tabId: next.tabId, managed: next.managed,
+            navStatus: next.navStatus, canGoBack: next.canGoBack, canGoForward: next.canGoForward, serverControlled: true });
+          return next;
+        }
+      }
       // Persisted client surfaces must not bind to a different tab after a server restart.
       const tabId = `${newPreviewTabId()}${runtime === "server" ? `_${serverEpoch}` : ""}`;
       const updatedAt = yield* currentIsoTimestamp;
@@ -224,6 +260,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
         ...(runtime === "server" && input.automationOwner !== undefined
           ? { automationOwner: input.automationOwner }
           : {}),
+        ...(runtime === "server" && managed !== undefined ? { managed: typeof managed === "function" ? managed(tabId) : managed } : {}),
         ...(input.reveal === undefined ? {} : { reveal: input.reveal }),
         updatedAt,
       };
@@ -304,6 +341,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           canGoBack: input.canGoBack,
           canGoForward: input.canGoForward,
           viewport: session.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
+          ...(input.managed === undefined ? {} : { managed: input.managed }),
           updatedAt,
         };
         const emit: PreviewEventDraft =
@@ -427,6 +465,15 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           : sessionsForThread(state, input.threadId);
         let revision = state.revision;
         for (const target of targets) {
+          if (config && target.snapshot.managed) {
+            try {
+              const selected = readThreadAttachment(config.stateDir, input.threadId);
+              if (selected?.engineTabId === target.snapshot.managed.engineTabId && selected.instanceId === target.snapshot.managed.instanceId && selected.profileId === target.snapshot.managed.profileId && selected.ownerEnvironmentId === target.snapshot.managed.ownerEnvironmentId)
+                writeThreadAttachment(config.stateDir, input.threadId, { ...selected, closed: true });
+            } catch {
+              return Effect.fail(new PreviewManagedBrowserError({ message: "The browser selection could not be detached." }));
+            }
+          }
           revision += 1;
           sessions.delete(compositeKey(target.threadId, target.tabId));
           eventsToEmit.push({
@@ -453,6 +500,14 @@ export const make = Effect.gen(function* PreviewManagerMake() {
 
   const list: PreviewManager["Service"]["list"] = Effect.fn("PreviewManager.list")(
     function* (input) {
+      if (config && !restoredAttachments.has(input.threadId)) {
+        const attachment = yield* Effect.try({
+          try: () => readThreadAttachment(config.stateDir, input.threadId),
+          catch: () => new PreviewManagedBrowserError({ message: "The saved managed browser selection is unreadable." }),
+        });
+        restoredAttachments.add(input.threadId);
+        if (attachment && !attachment.closed) yield* open({ threadId: input.threadId, runtime: "server", managed: attachment }).pipe(Effect.mapError(() => new PreviewManagedBrowserError({ message: "The saved managed browser could not be restored." })));
+      }
       return yield* SynchronizedRef.get(stateRef).pipe(
         Effect.map((state): PreviewListResult => ({
           sessions: sessionsForThread(state, input.threadId)

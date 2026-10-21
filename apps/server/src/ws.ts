@@ -27,6 +27,7 @@ import {
   authScopeResponse,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   type AuthEnvironmentScope,
   type ScheduledTaskListResult,
@@ -123,6 +124,9 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as ManagedBrowserControls from "./browser/ManagedBrowserControls.ts";
+import { readAgentIdentity } from "./browser/ManagedBrowserAgentIdentity.ts";
+import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -1225,6 +1229,13 @@ const layerWsRpc = (
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const managedBrowser = yield* ManagedBrowserControls.ManagedBrowserControls;
+      const browserIdentityRegistry = yield* McpSessionRegistry.McpSessionRegistry;
+      // The same identity the preview stream route builds, so a tab is shown here exactly as it is streamed.
+      const managedBrowserViewer = {
+        sessionId: currentSessionId,
+        administrator: currentSession.scopes.includes(AuthAccessWriteScope),
+      };
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -2040,6 +2051,24 @@ const layerWsRpc = (
               Effect.andThen(subscribeOrchestrationV2Thread(input)),
             ),
           ),
+        [WS_METHODS.managedBrowserAgentIdentity]: (input) => readAgentIdentity(input.threadId, browserIdentityRegistry),
+        [WS_METHODS.managedBrowserOverview]: (_input) =>
+          managedBrowser.overview(managedBrowserViewer),
+        [WS_METHODS.managedBrowserOpenTab]: (input) =>
+          managedBrowser.openTab(managedBrowserViewer, input),
+        [WS_METHODS.managedBrowserSetShared]: (input) =>
+          managedBrowser.setShared(managedBrowserViewer, input),
+        [WS_METHODS.managedBrowserSetControl]: (input) =>
+          managedBrowser.setControl(managedBrowserViewer, input),
+        [WS_METHODS.managedBrowserListGrants]: (_input) => managedBrowser.listGrants,
+        [WS_METHODS.managedBrowserCreateGrant]: (input) => managedBrowser.createGrant(input),
+        [WS_METHODS.managedBrowserRevokeGrant]: (input) => managedBrowser.revokeGrant(input),
+        [WS_METHODS.managedBrowserListEnrollments]: (_input) => managedBrowser.listEnrollments,
+        [WS_METHODS.managedBrowserEnroll]: (input) => managedBrowser.enroll(input),
+        [WS_METHODS.managedBrowserRemoveEnrollment]: (input) =>
+          managedBrowser.removeEnrollment(input),
+        [WS_METHODS.managedBrowserUpdateStatus]: (_input) => managedBrowser.updateStatus,
+        [WS_METHODS.managedBrowserUpdate]: (input) => managedBrowser.update(input),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
@@ -3131,6 +3160,7 @@ export const layer = Layer.unwrap(
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const managedBrowserControls = yield* ManagedBrowserControls.ManagedBrowserControls;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3197,6 +3227,13 @@ export const layer = Layer.unwrap(
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              // The shared browser is wired once with the server, like the preview browser, not per request.
+              Layer.provide(
+                Layer.succeed(
+                  ManagedBrowserControls.ManagedBrowserControls,
+                  managedBrowserControls,
+                ),
+              ),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

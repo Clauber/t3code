@@ -11,6 +11,7 @@ export type SettingsSheetTarget =
   | "SettingsEnvironmentSourceControl"
   | "SettingsEnvironmentAgentBehavior"
   | "SettingsEnvironmentMaintenance"
+  | "SettingsSharedBrowser"
   | "SettingsProviderAccounts"
   | "SettingsKeyboard"
   | "SettingsFollowUp"

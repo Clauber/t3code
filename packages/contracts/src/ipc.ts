@@ -1039,6 +1039,51 @@ export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
   webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
 });
 
+const DesktopPreviewExtensionIdSchema = Schema.String.check(Schema.isPattern(/^[a-p]{32}$/));
+
+/** A Chrome Web Store extension installed in a desktop browser profile. */
+export const DesktopPreviewExtensionSchema = Schema.Struct({
+  id: DesktopPreviewExtensionIdSchema,
+  name: Schema.String,
+  version: Schema.String,
+  hasPopup: Schema.Boolean,
+  badgeText: Schema.String,
+  /** The toolbar icon as a PNG data URL. */
+  icon: Schema.optionalKey(Schema.String),
+});
+export type DesktopPreviewExtension = typeof DesktopPreviewExtensionSchema.Type;
+
+/** A downloaded, verified extension waiting for the user to confirm its permissions. */
+export const DesktopPreviewExtensionInstallSchema = Schema.Struct({
+  token: Schema.String,
+  id: DesktopPreviewExtensionIdSchema,
+  name: Schema.String,
+  version: Schema.String,
+  /** Chrome's permission warnings for the package. */
+  warnings: Schema.Array(Schema.String),
+  /** Requested APIs T3 does not provide. */
+  unavailable: Schema.Array(Schema.String),
+  /** True when this replaces an installed version. */
+  update: Schema.Boolean,
+});
+export type DesktopPreviewExtensionInstall = typeof DesktopPreviewExtensionInstallSchema.Type;
+
+export const DesktopPreviewExtensionTokenInputSchema = Schema.Struct({
+  token: Schema.String.check(Schema.isMaxLength(64)),
+});
+
+export const DesktopPreviewExtensionInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  extensionId: DesktopPreviewExtensionIdSchema,
+});
+
+export const DesktopPreviewExtensionPopupInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  extensionId: DesktopPreviewExtensionIdSchema,
+  /** The toolbar button that opened it, in CSS pixels of the app window. */
+  anchor: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }),
+});
+
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   url: Schema.String,
@@ -1053,6 +1098,7 @@ export const DesktopPreviewConfigInputSchema = Schema.Struct({
    * UA rewrite or permission handlers installed.
    */
   profileId: Schema.optional(BrowserProfileId),
+  managedProfileId: Schema.optional(Schema.String),
 });
 
 export const DesktopPreviewClearDataInputSchema = Schema.Struct({
@@ -1290,7 +1336,25 @@ export interface DesktopPreviewBridge {
   getPreviewConfig: (
     environmentId: EnvironmentId,
     profileId?: string,
+    managedProfileId?: string,
   ) => Promise<DesktopPreviewWebviewConfig>;
+  /**
+   * Chrome Web Store extensions of the tab's browser profile. Absent on
+   * desktop builds without extension support.
+   */
+  extensions?: {
+    list: (tabId: string) => Promise<ReadonlyArray<DesktopPreviewExtension>>;
+    /** Downloads and verifies the extension of the Web Store page the tab shows; installs nothing yet. */
+    prepareInstall: (tabId: string) => Promise<DesktopPreviewExtensionInstall>;
+    commitInstall: (token: string) => Promise<DesktopPreviewExtension>;
+    discardInstall: (token: string) => Promise<void>;
+    uninstall: (tabId: string, extensionId: string) => Promise<void>;
+    openPopup: (
+      tabId: string,
+      extensionId: string,
+      anchor: { readonly x: number; readonly y: number; readonly width: number; readonly height: number },
+    ) => Promise<void>;
+  };
   /** Browsers on this machine whose cookies can be imported. */
   listBrowserImportSources: () => Promise<ReadonlyArray<BrowserImportSource>>;
   importBrowserCookies: (input: {

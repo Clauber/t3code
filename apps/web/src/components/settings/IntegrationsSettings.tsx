@@ -118,6 +118,8 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import { ManagedBrowserConnectionsSettings } from "./ManagedBrowserConnectionsSettings";
+import { ManagedBrowserSettings } from "./ManagedBrowserSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
 import type { ImportOutcome } from "./browserImportWizard.logic";
@@ -1546,7 +1548,21 @@ export function IntegrationsSettingsPanel() {
           previewDefaults
         )}
       </SettingsSection>
+      <ManagedBrowserSettings />
+      <OtherComputersBrowsers />
       <DeviceIntegrationSettings />
     </SettingsPageContainer>
+  );
+}
+
+/** Agents on the environment the header selects may use browsers that other computers run. */
+function OtherComputersBrowsers() {
+  const { environment } = useSettingsScope();
+  return (
+    <ManagedBrowserConnectionsSettings
+      environmentId={
+        environment?.connection.phase === "connected" ? environment.environmentId : null
+      }
+    />
   );
 }

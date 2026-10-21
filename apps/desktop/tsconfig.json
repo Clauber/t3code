@@ -2,8 +2,21 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
-    "types": ["node", "electron"],
-    "lib": ["ESNext", "DOM", "esnext.disposable"]
+    "types": [
+      "node",
+      "electron"
+    ],
+    "lib": [
+      "ESNext",
+      "DOM",
+      "esnext.disposable"
+    ]
   },
-  "include": ["src", "vite.config.ts", "../../scripts/lib"]
+  "include": [
+    "src",
+    "vite.config.ts",
+    "../../scripts/lib",
+    "../server/src/browser/ManagedBrowserUpdateFixture.ts",
+    "../server/src/browser/ManagedBrowserPackage.ts"
+  ]
 }

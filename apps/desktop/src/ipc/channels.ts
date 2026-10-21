@@ -92,6 +92,12 @@ export const PREVIEW_CLEAR_CACHE_CHANNEL = "desktop:preview-clear-cache";
 export const PREVIEW_GET_CONFIG_CHANNEL = "desktop:preview-get-config";
 export const PREVIEW_IMPORT_SOURCES_CHANNEL = "desktop:preview-import-sources";
 export const PREVIEW_IMPORT_COOKIES_CHANNEL = "desktop:preview-import-cookies";
+export const PREVIEW_EXTENSIONS_LIST_CHANNEL = "desktop:preview-extensions-list";
+export const PREVIEW_EXTENSIONS_PREPARE_INSTALL_CHANNEL = "desktop:preview-extensions-prepare-install";
+export const PREVIEW_EXTENSIONS_COMMIT_INSTALL_CHANNEL = "desktop:preview-extensions-commit-install";
+export const PREVIEW_EXTENSIONS_DISCARD_INSTALL_CHANNEL = "desktop:preview-extensions-discard-install";
+export const PREVIEW_EXTENSIONS_UNINSTALL_CHANNEL = "desktop:preview-extensions-uninstall";
+export const PREVIEW_EXTENSIONS_OPEN_POPUP_CHANNEL = "desktop:preview-extensions-open-popup";
 export const PREVIEW_SET_ANNOTATION_THEME_CHANNEL = "desktop:preview-set-annotation-theme";
 export const PREVIEW_SET_ANNOTATION_SEND_ENABLED_CHANNEL =
   "desktop:preview-set-annotation-send-enabled";

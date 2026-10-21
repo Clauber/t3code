@@ -141,6 +141,15 @@ export default defineConfig({
       outExtensions: () => ({ js: ".cjs" }),
       entry: ["src/mac-permission-preload.ts"],
     },
+    {
+      // Session preload for preview profiles' extension pages and service workers; self-contained like the above.
+      format: "cjs",
+      outDir: "dist-electron",
+      dts: false,
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      entry: ["src/extension-api-preload.ts"],
+    },
   ],
   test: {
     // The Windows lane runs workspace suites concurrently; filesystem-heavy
