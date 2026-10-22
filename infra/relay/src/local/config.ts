@@ -36,8 +36,9 @@ export function validateConfig(input: unknown) {
     }
     return url.origin;
   };
+  const clientOrigin = (value: string) => (value === "t3code://app" ? value : origin(value));
   origin(config.issuer);
-  config.allowedOrigins.forEach(origin);
+  config.allowedOrigins.forEach(clientOrigin);
   const ids = new Set<string>();
   for (const environment of config.environments) {
     origin(environment.httpBaseUrl);
@@ -49,7 +50,7 @@ export function validateConfig(input: unknown) {
   return {
     ...config,
     issuer: origin(config.issuer),
-    allowedOrigins: config.allowedOrigins.map(origin),
+    allowedOrigins: config.allowedOrigins.map(clientOrigin),
     environments: config.environments.map((environment) => ({
       ...environment,
       environmentPublicKey: environment.environmentPublicKey.trim(),

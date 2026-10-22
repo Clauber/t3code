@@ -425,7 +425,7 @@ NodeTest.test(
     const relay = await createLocalRelay({
       issuer,
       stateDir: directory,
-      allowedOrigins: [clientOrigin],
+      allowedOrigins: [clientOrigin, "t3code://app"],
       host: "127.0.0.1",
       port: 38443,
       tlsCertFile: "unused",
@@ -458,6 +458,15 @@ NodeTest.test(
         NodeAssert.ok(permittedHeaders.has(header), `Browser must permit ${header}`);
       NodeAssert.equal(permittedHeaders.has("*"), false);
       NodeAssert.equal(permittedHeaders.has("x-arbitrary-header"), false);
+      const desktop = await preflight("t3code://app");
+      NodeAssert.equal(desktop.status, 204);
+      NodeAssert.equal(desktop.headers.get("access-control-allow-origin"), "t3code://app");
+      const unauthenticated = await relay.handle(
+        new Request(`${issuer}/v1/environments`, { headers: { origin: "t3code://app" } }),
+      );
+      NodeAssert.equal(unauthenticated.status, 401);
+      NodeAssert.equal((await preflight("t3code://untrusted")).status, 403);
+      NodeAssert.equal((await preflight("null")).status, 403);
       const denied = await preflight("https://untrusted.example.test");
       NodeAssert.equal(denied.status, 403);
       NodeAssert.equal(denied.headers.get("access-control-allow-origin"), null);
