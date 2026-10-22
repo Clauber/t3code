@@ -5,6 +5,7 @@ import type {
   ServerSelfUpdateCapability,
 } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
+import { CLI_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
 
@@ -122,15 +123,10 @@ export function supportsServerUpdateThreadContinuation(
 /** The command to hand users whose server cannot update itself. */
 export function manualServerUpdateCommand(
   targetVersion: string,
-  installation?: ServerInstallation,
+  _installation?: ServerInstallation,
 ): string {
-  if (installation?.kind === "npm-global") {
-    const prefix = `'${installation.prefix.replaceAll("'", "'\\''")}'`;
-    return `npm install --global --prefix ${prefix} t3@${targetVersion}`;
-  }
-  const runner =
-    installation?.kind === "pnpm-dlx" ? "pnpm dlx" : installation?.kind === "bunx" ? "bunx" : "npx";
-  return `${runner} t3@${targetVersion}`;
+  const version = `'${targetVersion.replaceAll("'", "'\\''")}'`;
+  return `curl -fsSL https://raw.githubusercontent.com/${CLI_RELEASE_REPOSITORY}/main/scripts/install.sh | T3CODE_VERSION=${version} sh`;
 }
 
 export function serverUpdateGuidance(capability: ServerSelfUpdateCapability): string {

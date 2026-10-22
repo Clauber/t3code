@@ -165,21 +165,21 @@ describe("ServerUpdateAction", () => {
   it.each([
     [
       { kind: "npm-global", prefix: "/opt/node" },
-      "npm install --global --prefix '/opt/node' t3@0.0.45",
+      "curl -fsSL https://raw.githubusercontent.com/Clauber/t3code/main/scripts/install.sh | T3CODE_VERSION='0.0.45' sh",
       "Update command copied",
       "then restart t3",
     ],
     [
       { kind: "npx" },
-      "npx t3@0.0.45",
-      "Relaunch command copied",
-      "This does not update an installed t3 command.",
+      "curl -fsSL https://raw.githubusercontent.com/Clauber/t3code/main/scripts/install.sh | T3CODE_VERSION='0.0.45' sh",
+      "Update command copied",
+      "then restart t3",
     ],
     [
       undefined,
-      "npx t3@0.0.45",
-      "Relaunch command copied",
-      "This does not update an installed t3 command.",
+      "curl -fsSL https://raw.githubusercontent.com/Clauber/t3code/main/scripts/install.sh | T3CODE_VERSION='0.0.45' sh",
+      "Update command copied",
+      "then restart t3",
     ],
   ] satisfies ReadonlyArray<readonly [ServerInstallation | undefined, string, string, string]>)(
     "copies an honest manual command for %j without invoking remote update",

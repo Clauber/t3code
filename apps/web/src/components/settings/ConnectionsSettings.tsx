@@ -163,7 +163,8 @@ import {
   supportsDesktopAppUpdate,
   supportsServerUpdateThreadContinuation,
 } from "~/versionSkew";
-import { hasCloudPublicConfig } from "~/cloud/publicConfig";
+import { hasCloudPublicConfig, hasPrivateRelayConfig } from "~/cloud/publicConfig";
+import { PrivateRelaySettings } from "./PrivateRelaySettings";
 import { RemoveT3ConnectEnvironmentDialog } from "../clerk/RemoveT3ConnectEnvironmentDialog";
 import { useCloudLinkController } from "~/cloud/useCloudLinkController";
 import { authEnvironment } from "~/state/auth";
@@ -2078,7 +2079,7 @@ function CloudRemoteEnvironmentRows({
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly savedEnvironments: ReadonlyArray<EnvironmentPresentation>;
 }) {
-  return hasCloudPublicConfig() ? (
+  return hasCloudPublicConfig() || hasPrivateRelayConfig() ? (
     <CloudEnvironmentConnectRows
       primaryEnvironmentId={primaryEnvironmentId}
       savedEnvironments={savedEnvironments}
@@ -4104,6 +4105,7 @@ export function ConnectionsSettings() {
 
   return (
     <SettingsPageContainer width="wide">
+      <PrivateRelaySettings />
       {primarySettings}
       <SettingsSection
         {...searchableSetting("remote-environments")}

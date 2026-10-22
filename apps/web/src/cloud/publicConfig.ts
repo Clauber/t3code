@@ -70,8 +70,16 @@ export function resolveRelayTracingConfig() {
 }
 
 export function hasCloudPublicConfig(): boolean {
+  if (import.meta.env.VITE_T3CODE_PRIVATE_RELAY === "1") return false;
   const config = resolveCloudPublicConfig();
   return Boolean(config.clerkPublishableKey && config.clerkJwtTemplate && config.relayUrl);
+}
+
+export function hasPrivateRelayConfig(): boolean {
+  return (
+    import.meta.env.VITE_T3CODE_PRIVATE_RELAY === "1" &&
+    resolveCloudPublicConfig().relayUrl !== null
+  );
 }
 
 export function resolveRelayClerkTokenOptions() {

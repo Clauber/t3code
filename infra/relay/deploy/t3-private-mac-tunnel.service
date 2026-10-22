@@ -1,0 +1,16 @@
+[Unit]
+Description=Private T3 Mac transport to Harness
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 127.0.0.1:39001:127.0.0.1:3773 mac
+Restart=always
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=20
+
+[Install]
+WantedBy=default.target

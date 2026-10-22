@@ -9,7 +9,10 @@
     "tunnels:census": "node scripts/tunnel-census.ts",
     "destroy": "alchemy destroy",
     "test": "vp test run --config ../../vite.config.ts --dir .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "local:start": "node --experimental-strip-types src/local/main.ts",
+    "local:test": "node --experimental-strip-types --test src/local/*.test.ts",
+    "local:typecheck": "tsc --noEmit -p src/local/tsconfig.json"
   },
   "dependencies": {
     "@clerk/backend": "catalog:",

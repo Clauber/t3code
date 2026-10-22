@@ -27,20 +27,16 @@ const MISMATCH_HINT =
   "Version mismatch. Try syncing the client and server to the same T3 Code version.";
 
 describe("versionSkew", () => {
-  it("updates only the proven npm prefix and safely quotes its path", () => {
-    expect(manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/node" })).toBe(
-      "npm install --global --prefix '/opt/node' t3@0.0.45",
+  it.each([
+    undefined,
+    { kind: "npm-global", prefix: "/opt/node" } as const,
+    { kind: "npx" } as const,
+    { kind: "pnpm-dlx" } as const,
+    { kind: "bunx" } as const,
+  ])("uses the fork installer for every installation kind (%s)", (installation) => {
+    expect(manualServerUpdateCommand("0.0.45", installation)).toBe(
+      "curl -fsSL https://raw.githubusercontent.com/Clauber/t3code/main/scripts/install.sh | T3CODE_VERSION='0.0.45' sh",
     );
-    expect(
-      manualServerUpdateCommand("0.0.45", { kind: "npm-global", prefix: "/opt/maria's node" }),
-    ).toBe("npm install --global --prefix '/opt/maria'\\''s node' t3@0.0.45");
-  });
-
-  it("keeps runner and unknown commands as relaunches", () => {
-    expect(manualServerUpdateCommand("0.0.45")).toBe("npx t3@0.0.45");
-    expect(manualServerUpdateCommand("0.0.45", { kind: "npx" })).toBe("npx t3@0.0.45");
-    expect(manualServerUpdateCommand("0.0.45", { kind: "pnpm-dlx" })).toBe("pnpm dlx t3@0.0.45");
-    expect(manualServerUpdateCommand("0.0.45", { kind: "bunx" })).toBe("bunx t3@0.0.45");
   });
   beforeEach(() => {
     branding.APP_VERSION = "0.0.34";

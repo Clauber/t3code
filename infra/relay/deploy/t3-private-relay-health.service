@@ -1,0 +1,9 @@
+[Unit]
+Description=Check private T3 relay HTTPS health
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/curl --fail --silent --show-error --max-time 10 --cacert /home/clauber/ai/certs/harness-dev-ca.crt https://10.69.42.164:38443/health
+NoNewPrivileges=true
+LogRateLimitIntervalSec=60s
+LogRateLimitBurst=5

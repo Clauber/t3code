@@ -13,6 +13,7 @@ import {
   type DirectoryRecord,
 } from "@electron/asar";
 
+import { CLI_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
@@ -2582,19 +2583,14 @@ export function resolveDesktopRuntimeDependencies(
 export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
   updateChannel: "latest" | "nightly",
 ) {
-  const env = yield* Config.all({
-    updateRepository: Config.String("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
-    githubRepository: Config.String("GITHUB_REPOSITORY").pipe(Config.option),
-  });
-  const rawRepo = (
-    Option.getOrUndefined(env.updateRepository)?.trim() ||
-    Option.getOrUndefined(env.githubRepository)?.trim() ||
-    ""
-  ).trim();
-  if (!rawRepo) return undefined;
-
-  const [owner, repo, ...rest] = rawRepo.split("/");
-  if (!owner || !repo || rest.length > 0) return undefined;
+  const updateRepository = yield* Config.String("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(
+    Config.withDefault(CLI_RELEASE_REPOSITORY),
+  );
+  // An inherited upstream build setting must not replace this fork with upstream binaries.
+  if (updateRepository.trim().toLowerCase() !== CLI_RELEASE_REPOSITORY.toLowerCase()) {
+    return undefined;
+  }
+  const [owner, repo] = CLI_RELEASE_REPOSITORY.split("/");
 
   return {
     provider: "github",
@@ -2718,15 +2714,15 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
     const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
-    if (publishConfig) {
-      buildConfig.publish = [publishConfig];
-    } else if (mockUpdates) {
+    if (mockUpdates) {
       buildConfig.publish = [
         {
           provider: "generic",
           url: resolveMockUpdateServerUrl(mockUpdateServerPort),
         },
       ];
+    } else if (publishConfig) {
+      buildConfig.publish = [publishConfig];
     }
   }
 

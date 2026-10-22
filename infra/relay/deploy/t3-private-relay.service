@@ -1,0 +1,23 @@
+[Unit]
+Description=Private T3 discovery and authentication
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/workspace/projects/t3code/.worktree/private-relay
+Environment=NODE_EXTRA_CA_CERTS=/home/clauber/ai/certs/harness-dev-ca.crt
+ExecStart=/usr/bin/node --experimental-strip-types infra/relay/src/local/main.ts /home/clauber/.config/t3-private-relay/config.json
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+[Install]
+WantedBy=default.target

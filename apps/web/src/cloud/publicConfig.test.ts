@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   CloudPublicConfigMissingError,
   hasCloudPublicConfig,
+  hasPrivateRelayConfig,
   resolveRelayClerkTokenOptions,
 } from "./publicConfig.ts";
 
@@ -11,6 +12,17 @@ afterEach(() => {
 });
 
 describe("hasCloudPublicConfig", () => {
+  it("private mode disables hosted identity even when hosted keys remain configured", () => {
+    vi.stubEnv("VITE_T3CODE_PRIVATE_RELAY", "1");
+    vi.stubEnv("VITE_T3CODE_RELAY_URL", "https://relay.example.test");
+    vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_example");
+    vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "t3-relay");
+    expect(hasPrivateRelayConfig()).toBe(true);
+    expect(hasCloudPublicConfig()).toBe(false);
+    vi.stubEnv("VITE_T3CODE_RELAY_URL", "http://relay.example.test");
+    expect(hasPrivateRelayConfig()).toBe(false);
+    expect(hasCloudPublicConfig()).toBe(false);
+  });
   it("requires both public cloud values", () => {
     vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "");
     vi.stubEnv("VITE_CLERK_JWT_TEMPLATE", "");

@@ -1,0 +1,8 @@
+[Unit]
+Description=Consistent private T3 relay backup
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/bin/sh -c '/usr/bin/python3 /workspace/projects/t3code/.worktree/private-relay/infra/relay/deploy/backup.py /home/clauber/.config/t3-private-relay/config.json /home/clauber/.local/share/t3-private-relay-backups/$(date -u +%%Y%%m%%dT%%H%%M%%SZ)'
+NoNewPrivileges=true

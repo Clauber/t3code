@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily private T3 relay snapshot
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

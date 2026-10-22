@@ -295,7 +295,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ConfigProvider.layer(
             ConfigProvider.fromEnv({
               env: {
-                T3CODE_DESKTOP_UPDATE_REPOSITORY: "pingdotgg/t3code",
+                T3CODE_DESKTOP_UPDATE_REPOSITORY: "Clauber/t3code",
               },
             }),
           ),
@@ -315,17 +315,49 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.deepStrictEqual(latestConfig, {
         provider: "github",
-        owner: "pingdotgg",
+        owner: "Clauber",
         repo: "t3code",
         releaseType: "release",
       });
       assert.deepStrictEqual(nightlyConfig, {
         provider: "github",
-        owner: "pingdotgg",
+        owner: "Clauber",
         repo: "t3code",
         releaseType: "prerelease",
         channel: "nightly",
       });
+    }),
+  );
+
+  it.effect("rejects an inherited upstream desktop feed", () =>
+    Effect.gen(function* () {
+      const config = yield* resolveGitHubPublishConfig("latest").pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: { T3CODE_DESKTOP_UPDATE_REPOSITORY: "pingdotgg/t3code" },
+            }),
+          ),
+        ),
+      );
+      assert.isUndefined(config);
+    }),
+  );
+
+  it.effect("keeps explicit mock updates on the local feed", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "1.2.3",
+        false,
+        true,
+        4321,
+        undefined,
+      );
+      assert.deepStrictEqual(config.publish, [
+        { provider: "generic", url: "http://localhost:4321" },
+      ]);
     }),
   );
 
@@ -365,7 +397,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(release.publish, [
         {
           provider: "github",
-          owner: "pingdotgg",
+          owner: "Clauber",
           repo: "t3code",
           releaseType: "release",
         },

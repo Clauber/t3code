@@ -1,0 +1,45 @@
+{
+ admin off
+ auto_https off
+}
+(private_tls) {
+ bind 10.69.42.164
+ tls /certs/harness-dev.crt /certs/harness-dev.key
+}
+https://10.69.42.164:38444 {
+ import private_tls
+ reverse_proxy 127.0.0.1:3773 {
+  header_up -Forwarded
+  header_up -X-Forwarded-Host
+  header_up X-Forwarded-Proto https
+  header_up -X-Forwarded-For
+ }
+}
+https://10.69.42.164:38445 {
+ import private_tls
+ reverse_proxy 127.0.0.1:39001 {
+  header_up -Forwarded
+  header_up -X-Forwarded-Host
+  header_up X-Forwarded-Proto https
+  header_up -X-Forwarded-For
+ }
+}
+https://10.69.42.164:38446 {
+ import private_tls
+ reverse_proxy 127.0.0.1:39002 {
+  header_up -Forwarded
+  header_up -X-Forwarded-Host
+  header_up X-Forwarded-Proto https
+  header_up -X-Forwarded-For
+ }
+}
+https://10.69.42.164:38447 {
+ import private_tls
+ reverse_proxy [::1]:6191 {
+  header_up Host localhost:6191
+  header_up -Forwarded
+  header_up -X-Forwarded-Host
+  header_up -X-Forwarded-Proto
+  header_up -X-Forwarded-For
+ }
+}

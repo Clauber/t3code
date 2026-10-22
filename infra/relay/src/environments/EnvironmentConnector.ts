@@ -1,4 +1,8 @@
 import {
+  verifyEnvironmentResponse,
+  verifyEnvironmentHealthResponse,
+} from "./EnvironmentResponse.ts";
+import {
   EnvironmentHttpBadRequestError,
   EnvironmentHttpConflictError,
   EnvironmentHttpForbiddenError,
@@ -8,10 +12,6 @@ import {
 import { makeEnvironmentHttpApiClient } from "@t3tools/client-runtime/rpc";
 import {
   RelayCloudEnvironmentHealthProofPayload,
-  RelayEnvironmentHealthResponse,
-  RelayEnvironmentHealthResponseProofPayload,
-  RelayEnvironmentMintResponse,
-  RelayEnvironmentMintResponseProofPayload,
   RelayCloudMintCredentialProofPayload,
   RelayEnvironmentConnectNotAuthorizedReason,
   type RelayEnvironmentConnectResponse,
@@ -21,13 +21,9 @@ import {
 import {
   normalizeRelayIssuer,
   RELAY_HEALTH_REQUEST_TYP,
-  RELAY_HEALTH_RESPONSE_TYP,
   RELAY_MINT_REQUEST_TYP,
-  RELAY_MINT_RESPONSE_TYP,
   signRelayJwt,
-  verifyRelayJwt,
 } from "@t3tools/shared/relayJwt";
-import { stableStringify } from "@t3tools/shared/relaySigning";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -129,7 +125,6 @@ export type EnvironmentConnectorError =
   | ManagedEndpointAllocations.ManagedEndpointAllocationPersistenceError;
 
 export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 10_000;
-const ENVIRONMENT_HEALTH_CLOCK_SKEW_MILLIS = 60 * 1_000;
 
 export class EnvironmentConnector extends Context.Service<
   EnvironmentConnector,
@@ -147,12 +142,6 @@ export class EnvironmentConnector extends Context.Service<
   }
 >()("t3code-relay/environments/EnvironmentConnector") {}
 
-const decodeMintResponseProof = Schema.decodeUnknownEffect(
-  RelayEnvironmentMintResponseProofPayload,
-);
-const decodeHealthResponseProof = Schema.decodeUnknownEffect(
-  RelayEnvironmentHealthResponseProofPayload,
-);
 const isEnvironmentHealthError = Schema.is(
   Schema.Union([
     EnvironmentHttpBadRequestError,
@@ -199,106 +188,6 @@ const currentTraceId = Effect.currentSpan.pipe(
 
 export const withoutRedirects = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }));
-
-const verifyWithEnvironmentKeys = Effect.fnUntraced(function* <A, E>(input: {
-  readonly token: string;
-  readonly typ: string;
-  readonly issuer: string;
-  readonly audience: string;
-  readonly nowEpochSeconds: number;
-  readonly environmentPublicKeys: ReadonlyArray<string>;
-  readonly decodePayload: (input: unknown) => Effect.Effect<A, E>;
-}) {
-  const { decodePayload, ...rest } = input;
-  for (const publicKey of input.environmentPublicKeys) {
-    const proof = yield* verifyRelayJwt({ ...rest, publicKey }).pipe(
-      Effect.flatMap(decodePayload),
-      Effect.option,
-    );
-    if (Option.isSome(proof)) {
-      return proof.value;
-    }
-    // A linked environment can have rotated keys; try the remaining active keys.
-  }
-  return null;
-});
-
-function verifyEnvironmentResponse(input: {
-  readonly response: RelayEnvironmentMintResponse;
-  readonly environmentId: string;
-  readonly requestNonce: string;
-  readonly clientProofKeyThumbprint: string;
-  readonly environmentPublicKeys: ReadonlyArray<string>;
-  readonly relayIssuer: string;
-  readonly nowEpochSeconds: number;
-}) {
-  return verifyWithEnvironmentKeys({
-    token: input.response.proof,
-    typ: RELAY_MINT_RESPONSE_TYP,
-    issuer: `t3-env:${input.environmentId}`,
-    audience: normalizeRelayIssuer(input.relayIssuer),
-    nowEpochSeconds: input.nowEpochSeconds,
-    environmentPublicKeys: input.environmentPublicKeys,
-    decodePayload: decodeMintResponseProof,
-  }).pipe(
-    Effect.map(
-      (proof) =>
-        proof !== null &&
-        proof.environmentId === input.environmentId &&
-        proof.requestNonce === input.requestNonce &&
-        proof.clientProofKeyThumbprint === input.clientProofKeyThumbprint &&
-        proof.credential === input.response.credential &&
-        Option.match(DateTime.make(input.response.expiresAt), {
-          onNone: () => false,
-          onSome: (expiresAt) => Math.floor(expiresAt.epochMilliseconds / 1_000) === proof.exp,
-        }),
-    ),
-  );
-}
-
-function verifyEnvironmentHealthResponse(input: {
-  readonly response: RelayEnvironmentHealthResponse;
-  readonly environmentId: string;
-  readonly requestNonce: string;
-  readonly requestIssuedAt: DateTime.DateTime;
-  readonly environmentPublicKeys: ReadonlyArray<string>;
-  readonly relayIssuer: string;
-  readonly now: DateTime.DateTime;
-}) {
-  return verifyWithEnvironmentKeys({
-    token: input.response.proof,
-    typ: RELAY_HEALTH_RESPONSE_TYP,
-    issuer: `t3-env:${input.environmentId}`,
-    audience: normalizeRelayIssuer(input.relayIssuer),
-    nowEpochSeconds: Math.floor(input.now.epochMilliseconds / 1_000),
-    environmentPublicKeys: input.environmentPublicKeys,
-    decodePayload: decodeHealthResponseProof,
-  }).pipe(
-    Effect.map((proof) => {
-      if (
-        proof === null ||
-        input.response.environmentId !== input.environmentId ||
-        proof.environmentId !== input.environmentId ||
-        proof.requestNonce !== input.requestNonce ||
-        proof.status !== input.response.status ||
-        proof.checkedAt !== input.response.checkedAt ||
-        stableStringify(proof.descriptor) !== stableStringify(input.response.descriptor)
-      ) {
-        return false;
-      }
-      const checkedAt = DateTime.make(input.response.checkedAt);
-      if (Option.isNone(checkedAt)) {
-        return false;
-      }
-      return (
-        checkedAt.value.epochMilliseconds >=
-          input.requestIssuedAt.epochMilliseconds - ENVIRONMENT_HEALTH_CLOCK_SKEW_MILLIS &&
-        checkedAt.value.epochMilliseconds <=
-          input.now.epochMilliseconds + ENVIRONMENT_HEALTH_CLOCK_SKEW_MILLIS
-      );
-    }),
-  );
-}
 
 export interface ManagedEndpointValidationFailure {
   readonly reason: Exclude<

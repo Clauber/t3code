@@ -1,0 +1,218 @@
+name: Fork release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact stable or nightly version, without v (use a unique fork version)"
+        required: true
+        type: string
+      relay_url:
+        description: "Private HTTPS relay endpoint, without trailing slash"
+        required: true
+        type: string
+      browser_baseline_tag:
+        description: "Existing Clauber/t3code release with both pinned browser baselines"
+        required: true
+        type: string
+      publish:
+        description: "Publish the verified artifacts as a GitHub release"
+        default: false
+        type: boolean
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  bundle:
+    if: github.repository == 'Clauber/t3code' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      channel: ${{ steps.validate.outputs.channel }}
+    env:
+      VERSION: ${{ inputs.version }}
+      T3CODE_RELAY_URL: ${{ inputs.relay_url }}
+      T3CODE_PRIVATE_RELAY: "1"
+      VITE_T3CODE_PRIVATE_RELAY: "1"
+      T3CODE_CLERK_PUBLISHABLE_KEY: ""
+      T3CODE_CLERK_JWT_TEMPLATE: ""
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ""
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+      - id: validate
+        name: Validate release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]]; then
+            echo channel=nightly >> "$GITHUB_OUTPUT"
+          elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo channel=stable >> "$GITHUB_OUTPUT"
+          else
+            echo 'Use a stable or nightly version; preview desktop builds have no update feed.' >&2
+            exit 1
+          fi
+          node -e 'const u = new URL(process.env.T3CODE_RELAY_URL); if (u.protocol !== "https:" || u.username || u.password || u.search || u.hash || u.pathname !== "/" || u.hostname === "relay.t3.codes") process.exit(1)'
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Install build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - name: Build bundle from the selected commit
+        run: |
+          node scripts/update-release-package-versions.ts "$VERSION"
+          vp run build:desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 7
+
+  native:
+    needs: bundle
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x64
+            runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+            rust_target: x86_64-unknown-linux-gnu
+            resource_key: linux-x64
+          - label: Linux arm64
+            runner: ubuntu-24.04-arm
+            platform: linux
+            target: AppImage
+            arch: arm64
+            rust_target: aarch64-unknown-linux-gnu
+            resource_key: linux-arm64
+          - label: macOS arm64
+            runner: macos-15
+            platform: mac
+            target: dmg
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+            resource_key: darwin-arm64
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      label: ${{ matrix.label }}
+      runner: ${{ matrix.runner }}
+      platform: ${{ matrix.platform }}
+      target: ${{ matrix.target }}
+      arch: ${{ matrix.arch }}
+      rust_target: ${{ matrix.rust_target }}
+      resource_key: ${{ matrix.resource_key }}
+      cli_archive: true
+      version: ${{ inputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: ${{ needs.bundle.outputs.channel }}
+      private_relay: true
+      require_macos_signing: true
+      browser_baseline_tag: ${{ inputs.browser_baseline_tag }}
+      relay_client_tracing: false
+      clerk_publishable_key: ""
+      clerk_jwt_template: ""
+      clerk_cli_oauth_client_id: ""
+      relay_url: ${{ inputs.relay_url }}
+
+  assemble:
+    needs: [bundle, native]
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ inputs.version }}
+      RELAY_URL: ${{ inputs.relay_url }}
+      BASELINE_TAG: ${{ inputs.browser_baseline_tag }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cli-*
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          path: release-assets
+          merge-multiple: true
+      - name: Record source and verify artifact inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          for platform in linux-x64 linux-arm64 darwin-arm64; do
+            test -s "t3-$VERSION-$platform.tar.gz"
+          done
+          test -s "T3-Code-$VERSION-arm64.dmg"
+          test -s "T3-Code-$VERSION-arm64.zip"
+          if [[ "$VERSION" == *-nightly.* ]]; then feed=nightly; else feed=latest; fi
+          test -s "$feed-mac.yml"
+          test -s "$feed-linux.yml"
+          test -s "$feed-linux-arm64.yml"
+          node - <<'JS'
+          const fs = require('node:fs');
+          fs.writeFileSync('source.json', JSON.stringify({
+            repository: process.env.GITHUB_REPOSITORY,
+            commit: process.env.GITHUB_SHA,
+            version: process.env.VERSION,
+            relayUrl: process.env.RELAY_URL,
+            browserBaselineTag: process.env.BASELINE_TAG,
+            workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+          }, null, 2) + '\n');
+          JS
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fork-release
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: [bundle, assemble]
+    if: github.repository == 'Clauber/t3code' && github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-24.04
+    environment: fork-release
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+      CHANNEL: ${{ needs.bundle.outputs.channel }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: fork-release
+          path: release-assets
+      - name: Publish the fork assets without replacing an existing release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum -c SHA256SUMS
+          tag_status=0
+          git ls-remote --exit-code --tags https://github.com/Clauber/t3code.git "refs/tags/v$VERSION" > /dev/null || tag_status=$?
+          if [[ "$tag_status" != 2 ]]; then
+            echo 'Release tag already exists, or its absence could not be verified.' >&2
+            exit 1
+          fi
+          flags=()
+          if [[ "$CHANNEL" == nightly ]]; then flags+=(--prerelease --latest=false); fi
+          gh release create "v$VERSION" ./* --repo Clauber/t3code --target "$GITHUB_SHA" \
+            --title "T3 Code fork $VERSION" --notes "Source and build provenance are recorded in source.json. Verify assets with SHA256SUMS." "${flags[@]}"
