@@ -3,7 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
-import { FetchHttpClient } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import * as FileSystem from "effect/FileSystem";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -21,7 +21,7 @@ import { hostingMarkerPath, publishHostingMarker } from "../browser/managedBrows
 import { pinnedRuntimePaths } from "../cloud/pinnedRuntime.ts";
 import * as BootService from "../cloud/bootService.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { repointLauncher, resolveLauncherPath, runUpdate } from "./update.ts";
+import { repointLauncher, resolveLauncherPath, runUpdate, resolveNewestVersion } from "./update.ts";
 
 it.layer(NodeServices.layer)("t3 update launcher", (it) => {
   it.effect("repoints a symlink that lives in a runtime versions tree", () =>
@@ -233,3 +233,34 @@ it.layer(NodeServices.layer)("t3 update and a server hosting managed browsers", 
       }),
   );
 });
+
+it.effect(
+  "private discovery uses only its mirror and rejects malformed or unavailable responses",
+  () =>
+    Effect.gen(function* () {
+      const root = "http://127.0.0.1:8790";
+      for (const fixture of [
+        { body: '[{"tag_name":"v1.2.3"}]', status: 200, succeeds: true },
+        { body: '{"invalid":true}', status: 200, succeeds: false },
+        { body: "unavailable", status: 503, succeeds: false },
+        { body: "[]", status: 200, succeeds: false },
+      ]) {
+        const requested: string[] = [];
+        const client = HttpClient.make((request) => {
+          requested.push(request.url);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(fixture.body, { status: fixture.status }),
+            ),
+          );
+        });
+        const result = yield* resolveNewestVersion("stable", root).pipe(
+          Effect.provideService(HttpClient.HttpClient, client),
+          Effect.result,
+        );
+        assert.equal(result._tag === "Success", fixture.succeeds);
+        assert.deepEqual(requested, [root + "/releases.json"]);
+      }
+    }),
+);

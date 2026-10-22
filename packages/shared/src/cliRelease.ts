@@ -10,6 +10,33 @@ export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 /** Overrides the download origin for mirrors and air-gapped installs. */
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
 
+/** Private installations must never fall back to the public release service. */
+export function resolveCliReleaseBaseUrl(
+  environment: Readonly<Record<string, string | undefined>>,
+): string | undefined {
+  const value = environment[CLI_RELEASE_BASE_URL_ENV];
+  if (value === undefined) {
+    if (environment.T3CODE_PRIVATE_RELAY === "1")
+      throw new Error("Private updates require T3CODE_RELEASE_BASE_URL");
+    return undefined;
+  }
+  const url = new URL(value.trim());
+  const loopback =
+    url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+  if (
+    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(
+      "Release feed must use HTTPS or loopback HTTP without credentials, query or fragment",
+    );
+  }
+  return url.href.replace(/\/+$/u, "");
+}
+
 /**
  * The archives a release attaches. Kept in step with the build_linux_cli
  * matrix, build_windows_arm64_cli, and the `cli_archive` rows in
@@ -97,7 +124,8 @@ export function cliReleaseChannelOf(version: string): CliReleaseChannel {
  * until a channel match turns up; a busy nightly train can push the newest
  * preview or stable release past any single page.
  */
-export function cliReleaseIndexPageUrl(page: number): string {
+export function cliReleaseIndexPageUrl(page: number, baseUrl?: string): string {
+  if (baseUrl !== undefined) return `${baseUrl}/releases.json`;
   return `https://api.github.com/repos/${CLI_RELEASE_REPOSITORY}/releases?per_page=100&page=${page}`;
 }
 

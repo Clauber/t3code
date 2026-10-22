@@ -10,7 +10,8 @@
 #   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
 #   T3CODE_HOME              T3 home directory (default: ~/.t3)
 #   T3CODE_INSTALL_BIN_DIR   where the `t3` symlink goes (default: ~/.local/bin)
-#   T3CODE_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
+#   T3CODE_RELEASE_BASE_URL  private feed root (releases.json + vVERSION assets); requires python3
+#   T3CODE_PRIVATE_RELAY=1   refuse public fallback when no private feed is configured
 #
 # The archive is unpacked into $T3CODE_HOME/runtime/versions/<version>, the
 # same layout `t3 service install` uses, so the service reuses this download
@@ -26,6 +27,25 @@ fail() {
   printf '\nt3 install: %s\n' "$1" >&2
   exit 1
 }
+
+private_feed=false
+redirect_limit=50
+if [ "${T3CODE_RELEASE_BASE_URL+x}" = x ]; then
+  private_feed=true
+  base_url="$T3CODE_RELEASE_BASE_URL"
+  redirect_limit=0
+  case "$base_url" in *'@'*|*'?'*|*'#'*|*[[:space:]]*) fail "release feed must not contain credentials, query, fragment or whitespace" ;; esac
+  authority="${base_url#*://}"; authority="${authority%%/*}"
+  case "$base_url" in
+    https://?*) [ -n "$authority" ] || fail "release feed requires a host" ;;
+    http://*)
+      case "$authority" in 127.0.0.1|localhost|127.0.0.1:*|localhost:*) ;; *) fail "HTTP release feed must be loopback" ;; esac ;;
+    *) fail "release feed must use HTTPS or loopback HTTP" ;;
+  esac
+  base_url="${base_url%/}"
+elif [ "${T3CODE_PRIVATE_RELAY:-0}" = 1 ]; then
+  fail "private updates require T3CODE_RELEASE_BASE_URL"
+fi
 
 # ANSI stays on stderr, so `curl ... | sh` still gets progress.
 interactive=false
@@ -53,14 +73,14 @@ step "Finding your release..."
 # Exit 44 on a 404 so callers can tell "no such asset" from a network failure.
 fetch() {
   if command -v curl >/dev/null 2>&1; then
-    status="$(curl -sSL -w '%{http_code}' "$1" -o "$2")" || return 1
+    status="$(curl -sSL --max-redirs "$redirect_limit" -w '%{http_code}' "$1" -o "$2")" || return 1
     case "$status" in
       2??) return 0 ;;
       404) return 44 ;;
       *) printf 'GET %s returned HTTP %s\n' "$1" "$status" >&2; return 1 ;;
     esac
   elif command -v wget >/dev/null 2>&1; then
-    wget -q --server-response "$1" -O "$2" 2>"$2.headers" && rm -f "$2.headers" && return 0
+    wget -q --max-redirect="$redirect_limit" --server-response "$1" -O "$2" 2>"$2.headers" && rm -f "$2.headers" && return 0
     if grep -q ' 404 ' "$2.headers" 2>/dev/null; then rm -f "$2.headers"; return 44; fi
     cat "$2.headers" >&2; rm -f "$2.headers"; return 1
   else
@@ -76,9 +96,9 @@ mb() {
 download() {
   if ! "$interactive"; then fetch "$1" "$2"; return; fi
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL -D "$2.headers" "$1" -o "$2" 2>"$2.errors" &
+    curl -fsSL --max-redirs "$redirect_limit" -D "$2.headers" "$1" -o "$2" 2>"$2.errors" &
   else
-    wget -q --server-response "$1" -O "$2" 2>"$2.headers" &
+    wget -q --max-redirect="$redirect_limit" --server-response "$1" -O "$2" 2>"$2.headers" &
   fi
   download_pid=$!
   previous=-1
@@ -154,8 +174,28 @@ if [ -z "$version" ]; then
     *) fail "T3CODE_CHANNEL must be stable, nightly, or preview" ;;
   esac
   tmp_index="$(mktemp)"
-  fetch "https://api.github.com/repos/${repo}/releases?per_page=100" "$tmp_index"
+  index_url="https://api.github.com/repos/${repo}/releases?per_page=100"
+  if "$private_feed"; then index_url="${base_url}/releases.json"; fi
+  fetch "$index_url" "$tmp_index"
+  if "$private_feed"; then
+    command -v python3 >/dev/null 2>&1 || fail "python3 is required to validate a private release index"
+    version="$(python3 - "$tmp_index" "$channel" <<'PYINDEX'
+import json, re, sys
+releases = json.load(open(sys.argv[1]))
+if not isinstance(releases, list) or any(not isinstance(r, dict) or not isinstance(r.get("tag_name"), str) or ("draft" in r and not isinstance(r["draft"], bool)) for r in releases):
+    raise SystemExit("invalid private release index")
+channel = sys.argv[2]
+pattern = r"v([0-9]+\.[0-9]+\.[0-9]+)" if channel == "stable" else r"v([0-9]+\.[0-9]+\.[0-9]+-" + channel + r"\.[0-9]{8}\.[0-9]+)"
+for release in releases:
+    match = re.fullmatch(pattern, release["tag_name"])
+    if match and not release.get("draft", False):
+        print(match.group(1))
+        break
+PYINDEX
+)" || fail "invalid private release index"
+  else
   version="$(sed -n "s/.*\"tag_name\": *\"${tag_pattern}\".*/\1/p" "$tmp_index" | head -n 1)"
+  fi
   rm -f "$tmp_index"
   [ -n "$version" ] || fail "could not find a ${channel} release; set T3CODE_VERSION"
 fi

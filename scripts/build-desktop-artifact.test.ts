@@ -288,6 +288,32 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "nightly");
   });
 
+  it.effect("uses a private generic publish feed and rejects a private build without one", () =>
+    Effect.gen(function* () {
+      const feed = yield* resolveGitHubPublishConfig("latest").pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: { T3CODE_PRIVATE_RELAY: "1", T3CODE_RELEASE_BASE_URL: "http://127.0.0.1:8790" },
+            }),
+          ),
+        ),
+      );
+      assert.deepEqual(feed, {
+        provider: "generic",
+        url: "http://127.0.0.1:8790",
+        channel: "latest",
+      });
+      const invalid = yield* resolveGitHubPublishConfig("latest").pipe(
+        Effect.provide(
+          ConfigProvider.layer(ConfigProvider.fromEnv({ env: { T3CODE_PRIVATE_RELAY: "1" } })),
+        ),
+        Effect.result,
+      );
+      assert.equal(invalid._tag, "Failure");
+    }),
+  );
+
   it.effect("resolves GitHub desktop publish config from Effect config", () =>
     Effect.gen(function* () {
       const latestConfig = yield* resolveGitHubPublishConfig("latest").pipe(

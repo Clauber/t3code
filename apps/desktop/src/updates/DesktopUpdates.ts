@@ -1,3 +1,5 @@
+import { parseAppUpdateMetadata, type AppUpdateMetadata } from "./appUpdateMetadata.ts";
+import { resolveCliReleaseBaseUrl } from "@t3tools/shared/cliRelease";
 import {
   DESKTOP_UPDATE_RESTART_MARKER_FILE,
   DesktopUpdateChannelSchema,
@@ -57,8 +59,7 @@ interface DesktopPreparedUpdateInstallResult extends DesktopUpdateActionResult {
   readonly failed: boolean;
 }
 
-const AppUpdateYmlConfig = Schema.Record(Schema.String, Schema.String);
-type AppUpdateYmlConfig = typeof AppUpdateYmlConfig.Type;
+type AppUpdateYmlConfig = AppUpdateMetadata;
 
 const UpdateInfo = Schema.Struct({
   version: Schema.String,
@@ -71,7 +72,6 @@ const UpdateInfo = Schema.Struct({
 const DownloadProgressInfo = Schema.Struct({
   percent: Schema.Number,
 });
-const decodeAppUpdateYmlConfig = Schema.decodeUnknownEffect(AppUpdateYmlConfig);
 const decodeUpdateInfo = Schema.decodeUnknownEffect(UpdateInfo);
 const decodeDownloadProgressInfo = Schema.decodeUnknownEffect(DownloadProgressInfo);
 
@@ -196,21 +196,6 @@ const {
   logError: logUpdaterError,
 } = DesktopObservability.makeComponentLogger("desktop-updater");
 
-function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYmlConfig>> {
-  const entries: Record<string, string> = {};
-  for (const line of raw.split("\n")) {
-    const match = line.match(/^(\w+):\s*(.+)$/);
-    if (match?.[1] && match[2]) {
-      entries[match[1]] = match[2].trim();
-    }
-  }
-
-  return decodeAppUpdateYmlConfig(entries).pipe(
-    Effect.map((config) => (config.provider ? Option.some(config) : Option.none())),
-    Effect.orElseSucceed(() => Option.none<AppUpdateYmlConfig>()),
-  );
-}
-
 function createBaseUpdateState(
   channel: DesktopUpdateChannel,
   enabled: boolean,
@@ -325,12 +310,7 @@ export const make = Effect.gen(function* () {
 
   const readAppUpdateYml = fileSystem.readFileString(environment.appUpdateYmlPath, "utf-8").pipe(
     Effect.option,
-    Effect.flatMap(
-      Option.match({
-        onNone: () => Effect.succeed(Option.none<AppUpdateYmlConfig>()),
-        onSome: parseAppUpdateYml,
-      }),
-    ),
+    Effect.map((raw) => parseAppUpdateMetadata(Option.getOrUndefined(raw))),
   );
 
   // The .deb carries electron-builder's resources/package-type marker.
@@ -345,12 +325,14 @@ export const make = Effect.gen(function* () {
           )
       : false;
 
+  const privateFeedRejected = yield* Ref.make(false);
+  const privateFeedEnabled = yield* Ref.make(false);
   const hasUpdateFeedConfig = Ref.get(appUpdateYmlConfigRef).pipe(
     Effect.map((appUpdateYmlConfig) => Option.isSome(appUpdateYmlConfig) || config.mockUpdates),
   );
 
   const resolveDisabledReason = Effect.gen(function* () {
-    const hasFeedConfig = yield* hasUpdateFeedConfig;
+    const hasFeedConfig = (yield* hasUpdateFeedConfig) && !(yield* Ref.get(privateFeedRejected));
     return Option.fromNullishOr(
       getAutoUpdateDisabledReason({
         isDevelopment: environment.isDevelopment,
@@ -391,7 +373,10 @@ export const make = Effect.gen(function* () {
     channel: DesktopUpdateChannel,
   ) {
     yield* Effect.annotateCurrentSpan({ channel });
-    const allowsPrerelease = channel === "nightly";
+    const allowsPrerelease =
+      channel === "nightly" ||
+      ((yield* Ref.get(privateFeedEnabled)) &&
+        /-(preview|nightly)\./u.test(environment.appVersion));
     yield* electronUpdater.setChannel(channel);
     yield* electronUpdater.setAllowPrerelease(allowsPrerelease);
     yield* electronUpdater.setAllowDowngrade(allowsPrerelease);
@@ -912,10 +897,35 @@ export const make = Effect.gen(function* () {
         void Effect.runPromiseWith(context)(effect);
       };
 
-      const appUpdateYmlConfig = yield* readAppUpdateYml;
+      const packagedFeed = yield* readAppUpdateYml;
+      const appUpdateYmlConfig = Option.fromNullishOr(packagedFeed);
       yield* Ref.set(appUpdateYmlConfigRef, appUpdateYmlConfig);
+      const runtimeFeed = Option.getOrUndefined(config.releaseBaseUrl);
+      const privateFeed = yield* Effect.try(() =>
+        resolveCliReleaseBaseUrl({
+          T3CODE_RELEASE_BASE_URL:
+            runtimeFeed ?? (packagedFeed?.provider === "generic" ? packagedFeed.url : undefined),
+          T3CODE_PRIVATE_RELAY:
+            config.privateReleaseMode || packagedFeed?.provider === "generic" ? "1" : "0",
+        }),
+      ).pipe(Effect.result);
+      if (packagedFeed === null || privateFeed._tag === "Failure") {
+        yield* Ref.set(privateFeedRejected, true);
+        const settings = yield* desktopSettings.get;
+        yield* setState(createBaseUpdateState(settings.updateChannel, false, environment));
+        yield* logUpdaterError("Private release feed configuration is invalid; updates disabled.");
+        return;
+      }
+      if (privateFeed.success !== undefined) {
+        yield* Ref.set(privateFeedEnabled, true);
+        yield* electronUpdater.setFeedURL({ provider: "generic", url: privateFeed.success });
+        yield* Ref.set(
+          appUpdateYmlConfigRef,
+          Option.some({ provider: "generic", url: privateFeed.success }),
+        );
+      }
 
-      if (config.mockUpdates) {
+      if (config.mockUpdates && privateFeed.success === undefined) {
         yield* electronUpdater.setFeedURL({
           provider: "generic",
           url: `http://localhost:${config.mockUpdateServerPort}`,

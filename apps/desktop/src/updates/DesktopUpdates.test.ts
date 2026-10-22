@@ -21,6 +21,83 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 describe("DesktopUpdates", () => {
+  it.effect(
+    "a packaged private preview uses its baked feed without runtime environment configuration",
+    () => {
+      const harness = makeHarness({
+        appVersion: "1.2.3-preview.20261022.1",
+        appUpdateYml: "provider: generic\nurl: http://127.0.0.1:8790\n",
+        env: { T3CODE_DESKTOP_MOCK_UPDATES: "false" },
+      });
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+          assert.equal((yield* updates.getState).enabled, true);
+          assert.deepEqual(harness.feedUrls(), [
+            { provider: "generic", url: "http://127.0.0.1:8790" },
+          ]);
+          assert.equal(harness.allowPrerelease(), true);
+        }),
+      ).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "uses the private runtime or packaged feed and never falls back when private config is missing",
+    () =>
+      Effect.gen(function* () {
+        for (const fixture of [
+          {
+            env: {},
+            packaged: 'provider: "generic" # private\nurl: "http://127.0.0.1:8790"\n',
+            enabled: true,
+          },
+          { env: {}, packaged: "provider: [invalid", enabled: false },
+          { env: {}, packaged: "provider: generic\n", enabled: false },
+          {
+            env: { T3CODE_PRIVATE_RELAY: "1", T3CODE_RELEASE_BASE_URL: "http://127.0.0.1:8790" },
+            packaged: undefined,
+            enabled: true,
+          },
+          {
+            env: { T3CODE_PRIVATE_RELAY: "1" },
+            packaged: "provider: generic\nurl: http://127.0.0.1:8790\n",
+            enabled: true,
+          },
+          {
+            env: { T3CODE_PRIVATE_RELAY: "1" },
+            packaged: "provider: github\nowner: Clauber\nrepo: t3code\n",
+            enabled: false,
+          },
+          {
+            env: {
+              T3CODE_PRIVATE_RELAY: "1",
+              T3CODE_RELEASE_BASE_URL: "http://untrusted.example.test",
+            },
+            packaged: undefined,
+            enabled: false,
+          },
+        ]) {
+          const harness = makeHarness({
+            env: { T3CODE_DESKTOP_MOCK_UPDATES: "false", ...fixture.env },
+            ...(fixture.packaged ? { appUpdateYml: fixture.packaged } : {}),
+          });
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const updates = yield* DesktopUpdates.DesktopUpdates;
+              yield* updates.configure;
+              assert.equal((yield* updates.getState).enabled, fixture.enabled);
+              assert.deepEqual(
+                harness.feedUrls(),
+                fixture.enabled ? [{ provider: "generic", url: "http://127.0.0.1:8790" }] : [],
+              );
+            }),
+          ).pipe(Effect.provide(harness.layer));
+        }
+      }),
+  );
+
   it("preserves complete causes for update poller and event failures", () => {
     const cause = Cause.combine(
       Cause.fail(new Error("updater failed")),

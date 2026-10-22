@@ -38,7 +38,9 @@ describe.skipIf(HostProcessPlatform.defaultValue() !== "linux")("installer termi
       const archive = await NodeFSP.readFile(NodePath.join(root, archiveName));
       const checksum = NodeCrypto.createHash("sha256").update(archive).digest("hex");
       const server = NodeHttp.createServer((request, response) => {
-        if (request.url?.endsWith("/SHA256SUMS")) {
+        if (request.url === "/releases.json") {
+          response.end(JSON.stringify([{ tag_name: "v1.2.3", draft: false }]));
+        } else if (request.url?.endsWith("/SHA256SUMS")) {
           response.end(`${checksum}  ${archiveName}\n`);
         } else if (fail) {
           response.writeHead(500).end();
@@ -60,7 +62,8 @@ describe.skipIf(HostProcessPlatform.defaultValue() !== "linux")("installer termi
           ...process.env,
           TERM: "xterm",
           NO_COLOR: "1",
-          T3CODE_VERSION: version,
+          T3CODE_VERSION: "",
+          T3CODE_PRIVATE_RELAY: "1",
           T3CODE_HOME: NodePath.join(root, "home"),
           T3CODE_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
           T3CODE_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
@@ -113,3 +116,45 @@ describe.skipIf(HostProcessPlatform.defaultValue() !== "linux")("installer termi
     },
   );
 });
+
+it.each(["malformed", "unavailable", "redirect"])(
+  "private installer rejects %s index without public fallback",
+  async (failure) => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-private-index-"));
+    const requests: string[] = [];
+    const server = NodeHttp.createServer((request, response) => {
+      requests.push(request.url ?? "");
+      if (failure === "unavailable") response.writeHead(503).end();
+      else if (failure === "redirect")
+        response.writeHead(302, { location: "http://127.0.0.1:1/public-fallback" }).end();
+      else response.end('{"tag_name":"v1.2.3"');
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP listener");
+    const child = NodeChildProcess.spawn("sh", [NodePath.join(import.meta.dirname, "install.sh")], {
+      env: {
+        ...process.env,
+        T3CODE_PRIVATE_RELAY: "1",
+        T3CODE_VERSION: "",
+        T3CODE_HOME: NodePath.join(root, "home"),
+        T3CODE_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
+        T3CODE_CHANNEL: "stable",
+      },
+      stdio: "ignore",
+    });
+    try {
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.on("error", reject);
+        child.on("close", resolve);
+      });
+      expect(code).not.toBe(0);
+      expect(requests).toEqual(["/releases.json"]);
+    } finally {
+      if (child.exitCode === null) child.kill();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  },
+);

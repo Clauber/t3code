@@ -1,0 +1,14 @@
+[Unit]
+Description=Private T3 update artifacts
+
+[Service]
+WorkingDirectory=%h/.local/share/t3-release-mirror
+ExecStart=/usr/bin/python3 -m http.server 8790 --bind 127.0.0.1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=100
+
+[Install]
+WantedBy=default.target

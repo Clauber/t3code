@@ -16,7 +16,7 @@ import * as Path from "effect/Path";
 import { HttpClient } from "effect/http";
 import * as Schema from "effect/Schema";
 
-import { CLI_RELEASE_BASE_URL_ENV } from "@t3tools/shared/cliRelease";
+import { CLI_RELEASE_BASE_URL_ENV, resolveCliReleaseBaseUrl } from "@t3tools/shared/cliRelease";
 
 import * as ProcessRunner from "../processRunner.ts";
 import {
@@ -91,6 +91,8 @@ export interface BootServicePlan {
   readonly baseDir: string;
   readonly logPath: string;
   readonly unitPath: string;
+  readonly releaseBaseUrl?: string;
+  readonly privateReleaseMode?: boolean;
 }
 
 /** Pure renderer: service units cannot rely on the user's shell or PATH. */
@@ -106,6 +108,10 @@ export function renderBootServiceUnit(plan: BootServicePlan): string {
     "Type=simple",
     "WorkingDirectory=%h",
     `Environment=T3CODE_HOME=${quoteSystemdValue(plan.baseDir)}`,
+    ...(plan.releaseBaseUrl
+      ? [`Environment=T3CODE_RELEASE_BASE_URL=${quoteSystemdValue(plan.releaseBaseUrl)}`]
+      : []),
+    ...(plan.privateReleaseMode ? ["Environment=T3CODE_PRIVATE_RELAY=1"] : []),
     `Environment=${BOOT_SERVICE_UNIT_ENV}=${BOOT_SERVICE_UNIT_FILE}`,
     `ExecStart=${plan.program.map(quoteSystemdValue).join(" ")}`,
     // Let the launcher mark an explicit stop before it signals the server.
@@ -166,6 +172,15 @@ export function renderBootServicePlist(
     `    <string>${escapeXmlText(options.environmentPath)}</string>`,
     `    <key>T3CODE_HOME</key>`,
     `    <string>${escapeXmlText(plan.baseDir)}</string>`,
+    ...(plan.releaseBaseUrl
+      ? [
+          "    <key>T3CODE_RELEASE_BASE_URL</key>",
+          `    <string>${escapeXmlText(plan.releaseBaseUrl)}</string>`,
+        ]
+      : []),
+    ...(plan.privateReleaseMode
+      ? ["    <key>T3CODE_PRIVATE_RELAY</key>", "    <string>1</string>"]
+      : []),
     `    <key>${BOOT_SERVICE_UNIT_ENV}</key>`,
     `    <string>${BOOT_SERVICE_PLIST_FILE}</string>`,
     `  </dict>`,
@@ -563,8 +578,17 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const arch = yield* HostProcessArchitecture;
   const uid = yield* HostProcessUserId;
   const httpClient = yield* HttpClient.HttpClient;
-  const releaseBaseUrl = Option.getOrUndefined(
+  const configuredReleaseBaseUrl = Option.getOrUndefined(
     yield* Config.String(CLI_RELEASE_BASE_URL_ENV).pipe(Config.option),
+  );
+  const privateReleaseMode = yield* Config.String("T3CODE_PRIVATE_RELAY").pipe(
+    Config.withDefault("0"),
+  );
+  const releaseBaseUrl = yield* Effect.try(() =>
+    resolveCliReleaseBaseUrl({
+      [CLI_RELEASE_BASE_URL_ENV]: configuredReleaseBaseUrl,
+      T3CODE_PRIVATE_RELAY: privateReleaseMode,
+    }),
   );
   const homeDir = yield* Config.String("HOME").pipe(Config.withDefault(""));
   const installerPath = yield* Config.String("PATH").pipe(Config.withDefault(""));
@@ -627,6 +651,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   // The executable hosts the launcher as a hidden subcommand of itself, so
   // the unit runs the pinned runtime directly.
   const plan: BootServicePlan = {
+    ...(releaseBaseUrl ? { releaseBaseUrl } : {}),
+    ...(privateReleaseMode === "1" ? { privateReleaseMode: true } : {}),
     program: [runtimePaths.entryPath, "__service-launcher"],
     baseDir: input.baseDir,
     logPath,

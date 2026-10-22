@@ -1,3 +1,4 @@
+import { parseAppUpdateMetadata } from "../updates/appUpdateMetadata.ts";
 import * as NodeOS from "node:os";
 
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
@@ -264,10 +265,28 @@ const readBackendObservabilitySettings = Effect.gen(function* () {
   } satisfies BackendObservabilitySettings;
 });
 
+export function backendReleaseEnvironment(
+  appUpdateYml: string | undefined,
+  environment: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+  const metadata = parseAppUpdateMetadata(appUpdateYml);
+  if (metadata === null) return { T3CODE_PRIVATE_RELAY: "1", T3CODE_RELEASE_BASE_URL: "" };
+  const genericFeed = metadata?.provider === "generic";
+  const packagedUrl = metadata?.url;
+  const baseUrl = environment.T3CODE_RELEASE_BASE_URL ?? (genericFeed ? packagedUrl : undefined);
+  return {
+    ...(baseUrl !== undefined ? { T3CODE_RELEASE_BASE_URL: baseUrl } : {}),
+    ...(genericFeed || environment.T3CODE_PRIVATE_RELAY === "1"
+      ? { T3CODE_PRIVATE_RELAY: "1" }
+      : {}),
+  };
+}
+
 interface SharedBootstrapInput {
   readonly bootstrapToken: string;
   readonly bootstrapSecret: string;
   readonly observabilitySettings: BackendObservabilitySettings;
+  readonly releaseEnvironment: Record<string, string>;
 }
 
 // What the launch runs inside the distro. The staged runtime is the release's
@@ -596,6 +615,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       cwd: environment.backendCwd,
       env: {
         ...backendChildEnvPatch(),
+        ...input.releaseEnvironment,
         ELECTRON_RUN_AS_NODE: "1",
         // The server names this launcher in commands it asks a person to run.
         T3CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
@@ -746,7 +766,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
 
   const distroArgs = distroForConfig ? ["-d", distroForConfig] : [];
   const forwardedEnv: Record<string, string> = {};
-  const forwardedEnvNames: string[] = [];
+  const forwardedEnvNames: string[] = Object.keys(input.releaseEnvironment);
   for (const name of WSL_FORWARDED_ENV_NAMES) {
     const value = process.env[name];
     if (value !== undefined && value.length > 0) {
@@ -776,6 +796,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       ...parentEnvWithoutT3Home,
       ...backendChildEnvPatch(),
       ...forwardedEnv,
+      ...input.releaseEnvironment,
       ...(wslEnv !== undefined ? { WSLENV: wslEnv } : {}),
     },
     // env is already a complete process.env minus T3CODE_HOME; pass it
@@ -892,7 +913,13 @@ export const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
+    const appUpdateYml = environment.isPackaged
+      ? yield* fileSystem
+          .readFileString(environment.appUpdateYmlPath)
+          .pipe(Effect.orElseSucceed(() => undefined))
+      : undefined;
     return {
+      releaseEnvironment: backendReleaseEnvironment(appUpdateYml, process.env),
       bootstrapToken,
       bootstrapSecret,
       observabilitySettings,

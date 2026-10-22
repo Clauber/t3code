@@ -1648,3 +1648,45 @@ describe("DesktopBackendConfiguration", () => {
     }
   });
 });
+
+describe("private child release environment", () => {
+  it("decodes quoted YAML and rejects malformed metadata", () => {
+    assert.deepEqual(
+      DesktopBackendConfiguration.backendReleaseEnvironment(
+        'provider: "generic" # private\nurl: "http://127.0.0.1:8790"\n',
+        {},
+      ),
+      { T3CODE_RELEASE_BASE_URL: "http://127.0.0.1:8790", T3CODE_PRIVATE_RELAY: "1" },
+    );
+    assert.deepEqual(
+      DesktopBackendConfiguration.backendReleaseEnvironment("provider: [invalid", {}),
+      { T3CODE_RELEASE_BASE_URL: "", T3CODE_PRIVATE_RELAY: "1" },
+    );
+  });
+  it("inherits the baked feed without a shell environment", () => {
+    assert.deepEqual(
+      DesktopBackendConfiguration.backendReleaseEnvironment(
+        "provider: generic\nurl: http://127.0.0.1:8790\n",
+        {},
+      ),
+      { T3CODE_RELEASE_BASE_URL: "http://127.0.0.1:8790", T3CODE_PRIVATE_RELAY: "1" },
+    );
+  });
+  it("preserves runtime overrides and fails closed for a missing private URL", () => {
+    assert.deepEqual(
+      DesktopBackendConfiguration.backendReleaseEnvironment("provider: generic\n", {}),
+      { T3CODE_PRIVATE_RELAY: "1" },
+    );
+    assert.deepEqual(
+      DesktopBackendConfiguration.backendReleaseEnvironment(
+        "provider: generic\nurl: http://127.0.0.1:8790\n",
+        { T3CODE_RELEASE_BASE_URL: "https://private.example.com" },
+      ),
+      { T3CODE_RELEASE_BASE_URL: "https://private.example.com", T3CODE_PRIVATE_RELAY: "1" },
+    );
+    assert.deepEqual(
+      DesktopBackendConfiguration.backendReleaseEnvironment("provider: github\n", {}),
+      {},
+    );
+  });
+});

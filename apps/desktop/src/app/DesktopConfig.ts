@@ -56,6 +56,11 @@ export const DesktopConfig = Config.all({
     Config.withDefault("http/json"),
   ),
   appImagePath: trimmedString("APPIMAGE"),
+  releaseBaseUrl: trimmedString("T3CODE_RELEASE_BASE_URL"),
+  privateReleaseMode: Config.String("T3CODE_PRIVATE_RELAY").pipe(
+    Config.withDefault("0"),
+    Config.map((value) => value === "1"),
+  ),
   disableAutoUpdate: optionalBoolean("T3CODE_DISABLE_AUTO_UPDATE"),
   mockUpdates: optionalBoolean("T3CODE_DESKTOP_MOCK_UPDATES"),
   mockUpdateServerPort: Config.Port("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(

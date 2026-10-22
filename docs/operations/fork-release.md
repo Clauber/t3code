@@ -1,58 +1,46 @@
-# Private fork releases
+# Private fork updates
 
-Use `fork-release.yml` in `Clauber/t3code`. It runs only through `workflow_dispatch`; its `publish` input defaults to false. The inherited upstream release workflow is disabled for this repository. No workflow has been dispatched or release uploaded as part of this setup.
+The owner selected private distribution. Do not upload artifacts or browser baselines to GitHub releases. Source remains in `Clauber/t3code`; release storage and version discovery are served inside Harness.
 
-Select the reviewed source branch or commit, a unique stable or nightly version, the private HTTPS relay URL, and the browser baseline release tag. Preview versions are rejected because their desktop packages intentionally carry no updater feed. The workflow builds Linux x64, Linux arm64, and Apple Silicon packages using the existing native packaging and CLI smoke checks. GitHub-hosted runner labels follow [GitHub's runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+## Feed and access
 
-The workflow sets private relay mode without Clerk credentials and does not deploy or inspect Cloudflare. It leaves npm and hosted web publishing out of this release path. Each build produces a `fork-release` artifact containing the CLI archives, desktop installers and update manifests, `SHA256SUMS`, and `source.json`. The latter records the source commit, version, relay endpoint, browser baseline tag and workflow run. This is build provenance metadata, not a signed SLSA attestation.
+Harness serves `~/.local/share/t3-release-mirror` on `127.0.0.1:8790` through the user unit `t3-release-mirror.service`. Mac and GX10 use SSH local forwards to that same loopback endpoint. No public listener or bearer secret is embedded in the app. SSH authenticates each machine and encrypts traffic between machines. Processes on the same machine can reach the loopback feed; this assumes the existing owner-controlled hosts.
 
-Review the artifact and run the isolated update check below before publishing. Publication requires a separate explicit decision to invoke with `publish=true`. Configure the `fork-release` GitHub environment with a required reviewer if publication should require an additional approval. Existing release versions must not be reused: runtimes are cached by version, not repository or checksum. Updating an existing installation does not replace its cached runtime at the same version.
+Deployment definitions are in `infra/relay/deploy/`: the mirror unit, `t3-private-update-tunnel.service` for GX10, and `dev.t3code.private-updates.plist` for the Mac user's LaunchAgents. The `harness` SSH alias must already work with host-key verification and noninteractive authentication. Do not disable host-key verification. Keep the previous mirror unit and all previous artifacts when switching a host to the tunnel.
 
-## Prerequisites
+Set `T3CODE_RELEASE_BASE_URL=http://127.0.0.1:8790` and `T3CODE_PRIVATE_RELAY=1`. The root contains `releases.json`, an array of objects such as `{"tag_name":"vVERSION","draft":false}`, newest first. CLI assets and `SHA256SUMS` live in `vVERSION/`. Desktop updater YAML and desktop artifacts live at the root. Generate desktop YAML with the packager, including its SHA-512 values; do not hand-invent installer metadata. A configured feed must fail closed when unavailable. Provider CLI updates are a separate action and are not part of a T3 update.
 
-Mac publishing must have the existing release secrets `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and `MACOS_PROVISIONING_PROFILE`, plus repository variable `APPLE_TEAM_ID`. The reusable packager signs and notarizes the desktop and CLI with these credentials. The fork workflow refuses unsigned Mac packaging. On 2026-10-21, GitHub returned no repository secrets or variables for Clauber/t3code. The inspected Mac had one Apple Development identity and no Developer ID Application identity. A successful signed/notarized CI build remains blocked until the required distribution credentials are supplied and validated. The existing passkey provisioning requirements still apply to the reusable packager even though private authentication does not use Clerk.
+## Build
 
-The managed browser baselines must first be made available in an approved release in the same fork. That bootstrap upload needs separate approval. For each of `linux-x64` and `darwin-arm64`, upload:
-
-- `<target>.manifest.json`, copied from the baseline's `manifest.json`.
-- `<target>.manifest.sig`, copied from its detached signature.
-- The original `stealth-browser-v<version>-<target>.tar.gz` archive.
-
-The packaging code verifies each archive and manifest against `components/stealth-browser.lock.json` and its trusted signing keys before staging it. Missing packages fail the build. Linux arm64 intentionally carries no local browser baseline and uses a browser hosted elsewhere. Never regenerate a signature or alter the lock simply to make an arbitrary package pass.
-
-The local 9016 builders live outside this repository and are historical evidence, not this release entry point. In particular, `~/ai/sandbox/active/t3code-zcode/build-archive.sh` explicitly injects the official relay and writes directly to the local live mirror; do not use it for private relay builds.
-
-## Local build equivalent
-
-Run in an isolated source checkout on each native architecture with its dependencies installed. Keep build outputs outside live mirrors. Use a unique fork version and explicitly configure the private endpoint for both server and web:
+Build from an isolated checkout of an identifiable source commit. Never reuse a deployed version number: the runtime cache is keyed by version. Record the commit, package-version patch, tool versions, baseline digests and artifact checksums alongside each release. Stage outside the live feed until verification passes.
 
 ```bash
 export T3CODE_PRIVATE_RELAY=1 VITE_T3CODE_PRIVATE_RELAY=1
+export T3CODE_RELEASE_BASE_URL=http://127.0.0.1:8790
 export T3CODE_RELAY_URL=https://10.69.42.164:38443
 export VITE_T3CODE_RELAY_URL="$T3CODE_RELAY_URL"
 export T3CODE_CLERK_PUBLISHABLE_KEY= VITE_CLERK_PUBLISHABLE_KEY=
 export T3CODE_CLERK_JWT_TEMPLATE= VITE_CLERK_JWT_TEMPLATE=
-export T3CODE_CLERK_CLI_OAUTH_CLIENT_ID=
-export T3CODE_DESKTOP_UPDATE_REPOSITORY=Clauber/t3code
-export VP_NODE_VERSION=26.8.2
+export T3CODE_CLERK_CLI_OAUTH_CLIENT_ID= VITE_CLERK_CLI_OAUTH_CLIENT_ID=
 node scripts/update-release-package-versions.ts "$FORK_VERSION"
-vp run build:desktop
+./node_modules/.bin/vp run --filter t3 build
+node apps/server/scripts/cli.ts build-exe --verbose
 ```
 
-On Linux x64 and macOS arm64, set `T3CODE_STEALTH_BROWSER_BASELINE_DIR` to the verified baseline directory and `T3CODE_REQUIRE_STEALTH_BROWSER_BASELINE=1`. The release workflow supplies these from the approved baseline release. Use the native platform's existing `scripts/build-desktop-artifact.ts --platform <linux|mac> --target <AppImage|dmg> --arch <x64|arm64> --build-version "$FORK_VERSION" --skip-build`; Mac additionally requires `--signed` and the real signing/notarization configuration. Package the CLI with `scripts/build-cli-archive.ts` only after building its SEA executable and resource monitor, following the exact steps in `release-desktop.yml`. Run `scripts/smoke-cli-archive.ts --archive <archive> --expect-version "$FORK_VERSION"` on the native target. A cross-built archive without a native smoke run is not release evidence.
+Package Linux with `scripts/build-cli-archive.ts --platform linux --arch x64|arm64 --version "$FORK_VERSION" --resource-monitor-dir "$RESOURCE_MONITOR_DIR" --output-dir "$OUTPUT"`. Build the arm64 executable with `build-exe --target linux-arm64` first. Use the matching native resource monitor. For x64 require the verified browser baseline with `T3CODE_REQUIRE_STEALTH_BROWSER_BASELINE=1` and `T3CODE_STEALTH_BROWSER_BASELINE_DIR`; arm64 uses a remote browser. The baseline is verified against `components/stealth-browser.lock.json`, including its trusted signature. Run `scripts/smoke-cli-archive.ts` on the native host.
 
-## Isolated update and rollback
+On the Mac, use the same private build environment and verified Darwin browser baseline. Run `scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 --build-version "$FORK_VERSION" --output-dir "$OUTPUT" --signed`. The private build omits Clerk passkey provisioning, but retains real Developer ID signing. Keep the certificate and private key in the Mac login keychain. If SSH cannot access that key, run the build from the logged-in desktop Terminal session and approve only the signing prompt. Never place a keychain password in a command line. Notarization requires additional credentials and is distinct from signing; do not claim notarization from a successful signature check. Do not disable Gatekeeper or update signature validation.
 
-Use a fresh directory under `~/ai/sandbox/active/` and a verified previous fork archive. Extract it into `<proof>/home/runtime/versions/<old-version>` with its enclosing archive directory stripped, write `<old-version>\n` to `.install-complete`, and point `<proof>/bin/t3` at that directory's `t3` executable. Verify the previous archive against its retained `SHA256SUMS` before extraction.
+## Stage, update and rollback
 
-```bash
-export T3CODE_HOME="$PROOF_DIR/home"
-export T3CODE_RELEASE_BASE_URL="$VERIFIED_RELEASE_BASE_URL"
-"$PROOF_DIR/bin/t3" --version
-"$PROOF_DIR/bin/t3" update "$NEW_VERSION" --base-dir "$T3CODE_HOME"
-"$PROOF_DIR/bin/t3" --version
-"$PROOF_DIR/bin/t3" update "$OLD_VERSION" --allow-downgrade --base-dir "$T3CODE_HOME"
-"$PROOF_DIR/bin/t3" --version
-```
+Verify SHA-256 hashes before transferring CLI archives. Stage new files in a temporary directory on Harness and atomically rename the version directory into place. Install desktop artifacts before replacing updater YAML, and replace `releases.json` last. Keep the previous artifacts and back up release metadata. Back up the private feed through the existing host storage backup policy; a local second copy alone is not an off-host backup.
 
-Do not add `--yes` or run `service install/restart` for this check. The boot service has a shared unit name; an isolated home is not a separate service. Confirm that the live service's PID, ExecStart and unit-file digest are identical before and after. This check proves verified runtime installation, launcher switching and cached rollback. It does not test a running service restart, database downgrade, Mac signature acceptance or desktop replacement. Those require separate approved rollout gates and retained data/app backups.
+Before each live restart, inspect running tasks and back up configuration and SQLite databases using SQLite's backup API. Never copy only the database file while WAL writers are active. Test the new executable against an isolated data copy, then test rollback against that same copy. Compare migration sources and schema history separately; unchanged files do not alone prove every data transformation reversible.
+
+For an initial explicit version transition, use `t3 update "$FORK_VERSION"` with the private feed configured. Updating the desktop first lets Connections → Update all target the matching client version for eligible servers. Report offline/incompatible servers and per-server failures separately. Restart idle servers one at a time, confirm private authenticated access, and leave Harness last when it hosts the rollout session. Updating a runtime without restarting its process is not a completed deployment.
+
+Retain each previous runtime and the previous Mac app. CLI rollback uses `t3 update "$OLD_VERSION" --allow-downgrade`; rolling back to a preview can require interactive confirmation even with that flag. The tested isolated Linux path installed and switched launchers without affecting the live service, then explicitly restarted only its owned process. For a failed live rollout, stop the phase after restoring the retained artifact and checking health. Restore a database only when required by a separately assessed migration rollback, never blindly overwrite newer sessions.
+
+## Evidence and current limits
+
+The first private candidate, `0.0.47-nightly.20261022.1` at source `956ae5ea7b`, passed native Linux x64 and arm64 startup. An isolated x64 instance upgraded from 9016 and rolled back to 9016 with HTTP 200 and unchanged copied database counts/integrity. Evidence is under `~/ai/sandbox/active/t3-private-relay/rollout-20261022/update-proof/`. That candidate predates private discovery changes and is not the final rollout artifact. Live service restart, final native artifacts, signed Mac install and final fleet validation must be recorded separately after execution.

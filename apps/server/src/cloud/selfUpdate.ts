@@ -20,7 +20,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { HttpClient } from "effect/http";
 
-import { CLI_RELEASE_BASE_URL_ENV } from "@t3tools/shared/cliRelease";
+import { CLI_RELEASE_BASE_URL_ENV, resolveCliReleaseBaseUrl } from "@t3tools/shared/cliRelease";
 
 import { OuterUpdateGate } from "../browser/managedBrowserMaintenance.ts";
 import * as ServerConfig from "../config.ts";
@@ -182,8 +182,17 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   // Archive-distributed targets download from GitHub Releases. The client is
   // optional so callers without one (tests, npm-only hosts) still construct.
   const httpClient = yield* HttpClient.HttpClient;
-  const releaseBaseUrl = Option.getOrUndefined(
+  const configuredReleaseBaseUrl = Option.getOrUndefined(
     yield* Config.String(CLI_RELEASE_BASE_URL_ENV).pipe(Config.option),
+  );
+  const privateReleaseMode = yield* Config.String("T3CODE_PRIVATE_RELAY").pipe(
+    Config.withDefault("0"),
+  );
+  const releaseBaseUrl = yield* Effect.try(() =>
+    resolveCliReleaseBaseUrl({
+      [CLI_RELEASE_BASE_URL_ENV]: configuredReleaseBaseUrl,
+      T3CODE_PRIVATE_RELAY: privateReleaseMode,
+    }),
   );
   const inFlight = yield* Ref.make(false);
   // Present only where this server hosts a managed browser. Without one, nothing is held.

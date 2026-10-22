@@ -7,7 +7,7 @@ import {
   HostProcessWorkingDirectory,
 } from "@t3tools/shared/hostProcess";
 import {
-  CLI_RELEASE_BASE_URL_ENV,
+  resolveCliReleaseBaseUrl,
   CLI_RELEASE_CHANNELS,
   cliReleaseIndexPageUrl,
   cliReleaseChannelOf,
@@ -63,18 +63,26 @@ const RELEASE_INDEX_TIMEOUT = Duration.seconds(30);
 const RELEASE_INDEX_MAX_PAGES = 10;
 
 /** Asks GitHub for the newest published version on a channel, page by page. */
-const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(function* (
+export const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(function* (
   channel: CliReleaseChannel,
+  releaseBaseUrl?: string,
 ) {
   const httpClient = yield* HttpClient.HttpClient;
-  for (let page = 1; page <= RELEASE_INDEX_MAX_PAGES; page += 1) {
+  for (
+    let page = 1;
+    page <= (releaseBaseUrl === undefined ? RELEASE_INDEX_MAX_PAGES : 1);
+    page += 1
+  ) {
     const body = yield* httpClient
       .execute(
-        HttpClientRequest.get(cliReleaseIndexPageUrl(page)).pipe(
-          HttpClientRequest.setHeader("Accept", "application/vnd.github+json"),
+        HttpClientRequest.get(cliReleaseIndexPageUrl(page, releaseBaseUrl)).pipe(
+          HttpClientRequest.setHeader("Accept", "application/json"),
         ),
       )
       .pipe(
+        Effect.provideService(FetchHttpClient.RequestInit, {
+          redirect: releaseBaseUrl === undefined ? "follow" : "error",
+        }),
         Effect.flatMap(HttpClientResponse.filterStatusOk),
         Effect.flatMap((response) => response.text),
         Effect.mapError(() => new CliUpdateError({ reason: "Could not list t3 releases." })),
@@ -349,6 +357,11 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   const httpClient = yield* HttpClient.HttpClient;
   const service = yield* BootService.BootService;
 
+  const releaseBaseUrl = yield* Effect.try({
+    try: () => resolveCliReleaseBaseUrl(environment),
+    catch: () =>
+      new CliUpdateError({ reason: "Invalid or missing private release feed configuration." }),
+  });
   const currentVersion = packageJson.version;
   const channel = input.channel ?? cliReleaseChannelOf(currentVersion);
   if (input.requestedVersion !== undefined && !isExactServiceVersion(input.requestedVersion)) {
@@ -360,7 +373,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   progress.status("Checking for updates...");
   const targetVersion = yield* (
     input.requestedVersion === undefined
-      ? resolveNewestVersion(channel)
+      ? resolveNewestVersion(channel, releaseBaseUrl)
       : Effect.succeed(input.requestedVersion)
   ).pipe(Effect.ensuring(Effect.sync(progress.finish)));
   const targetChannel = cliReleaseChannelOf(targetVersion);
@@ -502,7 +515,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     httpClient,
     platform,
     arch,
-    releaseBaseUrl: environment[CLI_RELEASE_BASE_URL_ENV]?.trim() || undefined,
+    releaseBaseUrl,
     validate: (paths) =>
       runner
         .run({

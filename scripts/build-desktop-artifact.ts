@@ -13,7 +13,11 @@ import {
   type DirectoryRecord,
 } from "@electron/asar";
 
-import { CLI_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
+import {
+  CLI_RELEASE_REPOSITORY,
+  CLI_RELEASE_BASE_URL_ENV,
+  resolveCliReleaseBaseUrl,
+} from "@t3tools/shared/cliRelease";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
@@ -2584,6 +2588,16 @@ export function resolveDesktopRuntimeDependencies(
 export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
   updateChannel: "latest" | "nightly",
 ) {
+  const baseUrl = yield* Config.String(CLI_RELEASE_BASE_URL_ENV).pipe(Config.option);
+  const privateMode = yield* Config.String("T3CODE_PRIVATE_RELAY").pipe(Config.withDefault("0"));
+  const privateFeed = yield* Effect.try(() =>
+    resolveCliReleaseBaseUrl({
+      [CLI_RELEASE_BASE_URL_ENV]: Option.getOrUndefined(baseUrl),
+      T3CODE_PRIVATE_RELAY: privateMode,
+    }),
+  );
+  if (privateFeed !== undefined)
+    return { provider: "generic", url: privateFeed, channel: updateChannel };
   const updateRepository = yield* Config.String("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(
     Config.withDefault(CLI_RELEASE_REPOSITORY),
   );
@@ -2713,7 +2727,15 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
-  if (!isDesktopPreviewVersion(version)) {
+  const privateReleaseBuild = yield* Config.String("T3CODE_PRIVATE_RELAY").pipe(
+    Config.withDefault("0"),
+  );
+  const hasReleaseMirror = yield* Config.String(CLI_RELEASE_BASE_URL_ENV).pipe(Config.option);
+  if (
+    !isDesktopPreviewVersion(version) ||
+    privateReleaseBuild === "1" ||
+    Option.isSome(hasReleaseMirror)
+  ) {
     const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
     if (mockUpdates) {
       buildConfig.publish = [

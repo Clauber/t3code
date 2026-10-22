@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import {
   CLI_RELEASE_CHECKSUMS_FILE,
@@ -132,11 +132,15 @@ const fetchReleaseAsset = Effect.fn("cloud.pinned_runtime.fetch_release_asset")(
   httpClient: HttpClient.HttpClient,
   url: string,
   step: string,
+  allowRedirects: boolean,
   onProgress?: (progress: PinnedRuntimeProgress) => void,
 ) {
   // The install lock is held for the whole transaction, so a stalled download
   // must fail rather than block every other caller.
   return yield* httpClient.execute(HttpClientRequest.get(url)).pipe(
+    Effect.provideService(FetchHttpClient.RequestInit, {
+      redirect: allowRedirects ? "follow" : "error",
+    }),
     Effect.flatMap(HttpClientResponse.filterStatusOk),
     Effect.flatMap(
       Effect.fn(function* (response) {
@@ -203,6 +207,7 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
         httpClient,
         `${baseUrl}/${CLI_RELEASE_CHECKSUMS_FILE}`,
         "downloading the t3 release checksums",
+        input.releaseBaseUrl === undefined,
       ),
     ),
   );
@@ -216,6 +221,7 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
     httpClient,
     `${baseUrl}/${fileName}`,
     "downloading the t3 release archive",
+    input.releaseBaseUrl === undefined,
     input.onProgress,
   );
   input.onProgress?.({ stage: "verify" });

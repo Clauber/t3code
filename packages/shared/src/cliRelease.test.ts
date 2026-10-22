@@ -9,6 +9,7 @@ import {
   cliReleaseIndexPageUrl,
   newestCliReleaseVersion,
   parseChecksums,
+  resolveCliReleaseBaseUrl,
 } from "./cliRelease.ts";
 
 describe("cliRelease", () => {
@@ -90,5 +91,29 @@ describe("cliRelease", () => {
       "https://api.github.com/repos/Clauber/t3code/releases?per_page=100&page=1",
     );
     expect(cliReleaseIndexPageUrl(3)).toContain("page=3");
+  });
+});
+
+describe("private release routing", () => {
+  it("uses a single mirror index and preserves public defaults only when unconfigured", () => {
+    expect(resolveCliReleaseBaseUrl({})).toBeUndefined();
+    const root = resolveCliReleaseBaseUrl({
+      T3CODE_PRIVATE_RELAY: "1",
+      T3CODE_RELEASE_BASE_URL: "http://127.0.0.1:8790/",
+    });
+    expect(root).toBe("http://127.0.0.1:8790");
+    expect(cliReleaseIndexPageUrl(1, root)).toBe("http://127.0.0.1:8790/releases.json");
+    expect(cliReleaseDownloadBaseUrl("1.2.3", root)).toBe("http://127.0.0.1:8790/v1.2.3");
+    expect(() => resolveCliReleaseBaseUrl({ T3CODE_PRIVATE_RELAY: "1" })).toThrow();
+  });
+  it.each([
+    "",
+    "http://example.com",
+    "https://user:password@example.com",
+    "https://example.com?token=secret",
+    "https://example.com/#fragment",
+    "file:///tmp/releases",
+  ])("rejects invalid configured feed %s instead of falling back", (value) => {
+    expect(() => resolveCliReleaseBaseUrl({ T3CODE_RELEASE_BASE_URL: value })).toThrow();
   });
 });

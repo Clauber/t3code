@@ -831,3 +831,18 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
     }),
   );
 });
+
+it("persists private release routing when rendering service managers", () => {
+  const plan = { ...linuxPlan, releaseBaseUrl: "http://127.0.0.1:8790", privateReleaseMode: true };
+  const unit = BootService.renderBootServiceUnit(plan);
+  expect(unit).toContain("Environment=T3CODE_RELEASE_BASE_URL=http://127.0.0.1:8790");
+  expect(unit).toContain("Environment=T3CODE_PRIVATE_RELAY=1");
+  const plist = BootService.renderBootServicePlist(plan, {
+    homeDir: "/Users/example",
+    environmentPath: "/usr/bin",
+  });
+  expect(plist).toContain("<key>T3CODE_RELEASE_BASE_URL</key>");
+  expect(plist).toContain("<string>http://127.0.0.1:8790</string>");
+  expect(plist).toContain("<key>T3CODE_PRIVATE_RELAY</key>");
+  expect(BootService.renderBootServiceUnit(linuxPlan)).not.toContain("T3CODE_RELEASE_BASE_URL");
+});

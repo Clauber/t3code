@@ -9,7 +9,8 @@
 #   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
 #   T3CODE_HOME              T3 home directory (default: ~\.t3)
 #   T3CODE_INSTALL_BIN_DIR   where t3.exe is linked (default: ~\.local\bin)
-#   T3CODE_RELEASE_BASE_URL  mirror for releases/download (default: GitHub)
+#   T3CODE_RELEASE_BASE_URL  private feed root (releases.json + vVERSION assets)
+#   T3CODE_PRIVATE_RELAY=1   refuse public fallback when no private feed is configured
 #
 # The archive is unpacked into $T3CODE_HOME\runtime\versions\<version>, the
 # same layout `t3 service install` uses, so the service reuses this download.
@@ -24,6 +25,20 @@ $binDir = if ($env:T3CODE_INSTALL_BIN_DIR) { $env:T3CODE_INSTALL_BIN_DIR } else 
 function Fail([string] $message) {
   Write-Error "t3 install: $message"
   exit 1
+}
+
+$privateFeed = $null -ne $env:T3CODE_RELEASE_BASE_URL
+$redirectLimit = 50
+if ($privateFeed) {
+  $feedUri = [Uri]$env:T3CODE_RELEASE_BASE_URL
+  if (-not $feedUri.IsAbsoluteUri -or $feedUri.UserInfo -or $feedUri.Query -or $feedUri.Fragment -or
+      ($feedUri.Scheme -ne "https" -and -not ($feedUri.Scheme -eq "http" -and $feedUri.Host -in @("127.0.0.1", "localhost", "[::1]")))) {
+    Fail "release feed must use HTTPS or loopback HTTP without credentials, query or fragment"
+  }
+  $baseUrl = $feedUri.AbsoluteUri.TrimEnd("/")
+  $redirectLimit = 0
+} elseif ($env:T3CODE_PRIVATE_RELAY -eq "1") {
+  Fail "private updates require T3CODE_RELEASE_BASE_URL"
 }
 
 $terminal = -not [Console]::IsErrorRedirected -and $env:TERM -ne "dumb"
@@ -65,12 +80,14 @@ function Draw-Download([long] $bytes, [long] $total) {
 function Fetch([string] $uri, [string] $destination, [switch] $progress) {
   if (-not $progress -or -not $interactive) {
     $ProgressPreference = if ($progress -and $terminal) { "Continue" } else { "SilentlyContinue" }
-    Invoke-WebRequest -Uri $uri -OutFile $destination -UseBasicParsing
+    Invoke-WebRequest -Uri $uri -OutFile $destination -UseBasicParsing -MaximumRedirection $redirectLimit
     return
   }
   # Read the response once, displaying actual bytes received at most ten times a second.
   Add-Type -AssemblyName System.Net.Http
-  $client = New-Object System.Net.Http.HttpClient
+  $handler = New-Object System.Net.Http.HttpClientHandler
+  $handler.AllowAutoRedirect = -not $privateFeed
+  $client = New-Object System.Net.Http.HttpClient($handler)
   $response = $source = $file = $null
   try {
     $response = $client.GetAsync($uri, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
@@ -139,7 +156,8 @@ if (-not $version) {
     "preview" { '^v\d+\.\d+\.\d+-preview\.\d+\.\d+$' }
     default { Fail "T3CODE_CHANNEL must be stable, nightly, or preview" }
   }
-  $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases?per_page=100" -Headers @{ "User-Agent" = "t3-install" }
+  $indexUrl = if ($privateFeed) { "$baseUrl/releases.json" } else { "https://api.github.com/repos/$repo/releases?per_page=100" }
+  $releases = Invoke-RestMethod -Uri $indexUrl -MaximumRedirection $redirectLimit -Headers @{ "User-Agent" = "t3-install" }
   $tag = ($releases | Where-Object { -not $_.draft -and $_.tag_name -match $tagPattern } | Select-Object -First 1).tag_name
   if (-not $tag) { Fail "could not find a $channel release; set T3CODE_VERSION" }
   $version = $tag.Substring(1)

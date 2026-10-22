@@ -37,6 +37,8 @@ export interface UpdatesHarnessOptions {
   readonly platform?: NodeJS.Platform;
   /** Contents of the resources/package-type marker a Linux package ships. */
   readonly packageType?: string | undefined;
+  readonly appUpdateYml?: string;
+  readonly appVersion?: string;
 }
 
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
@@ -44,6 +46,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   let quitAndInstallCount = 0;
   let downloadCount = 0;
   let allowDowngrade = false;
+  let allowPrerelease = false;
   let fullChangelog = false;
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
@@ -75,7 +78,10 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     setAutoDownload: () => Effect.void,
     setAutoInstallOnAppQuit: () => Effect.void,
     setChannel: () => Effect.void,
-    setAllowPrerelease: () => Effect.void,
+    setAllowPrerelease: (value) =>
+      Effect.sync(() => {
+        allowPrerelease = value;
+      }),
     allowDowngrade: Effect.sync(() => allowDowngrade),
     setAllowDowngrade: (value) =>
       Effect.sync(() => {
@@ -152,7 +158,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
     platform: options.platform ?? "darwin",
     processArch: "x64",
-    appVersion: "1.2.3",
+    appVersion: options.appVersion ?? "1.2.3",
     appPath: "/repo",
     isPackaged: true,
     resourcesPath: "/missing/resources",
@@ -213,16 +219,18 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const updateRestartMarkers = new Set<string>();
   const layerFileSystem = FileSystem.layerNoop({
     readFileString: (path) =>
-      path === "/missing/resources/package-type" && options.packageType !== undefined
-        ? Effect.succeed(options.packageType)
-        : Effect.fail(
-            PlatformError.systemError({
-              module: "FileSystem",
-              method: "readFileString",
-              _tag: "NotFound",
-              pathOrDescriptor: path,
-            }),
-          ),
+      path.endsWith("/app-update.yml") && options.appUpdateYml !== undefined
+        ? Effect.succeed(options.appUpdateYml)
+        : path === "/missing/resources/package-type" && options.packageType !== undefined
+          ? Effect.succeed(options.packageType)
+          : Effect.fail(
+              PlatformError.systemError({
+                module: "FileSystem",
+                method: "readFileString",
+                _tag: "NotFound",
+                pathOrDescriptor: path,
+              }),
+            ),
     makeDirectory: () => Effect.void,
     writeFileString: (path) =>
       Effect.sync(() => {
@@ -262,6 +270,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     downloadCount: () => downloadCount,
     feedUrls: (): ElectronUpdater.ElectronUpdaterFeedUrl[] => feedUrls,
     fullChangelog: () => fullChangelog,
+    allowPrerelease: () => allowPrerelease,
     listenerCount: () =>
       Array.from(listeners.values()).reduce(
         (total, eventListeners) => total + eventListeners.size,

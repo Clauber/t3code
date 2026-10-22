@@ -1,0 +1,13 @@
+[Unit]
+Description=Private T3 update feed through Harness SSH
+
+[Service]
+ExecStart=/usr/bin/ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 127.0.0.1:8790:127.0.0.1:8790 harness
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=100
+
+[Install]
+WantedBy=default.target
