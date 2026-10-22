@@ -1,6 +1,10 @@
 "use client";
 
-import { FILL_PREVIEW_VIEWPORT, type ScopedThreadRef } from "@t3tools/contracts";
+import {
+  AuthPreviewOperateScope,
+  FILL_PREVIEW_VIEWPORT,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
 import { PanelRightIcon, PictureInPicture2, XIcon } from "lucide-react";
 import {
   type PointerEvent as ReactPointerEvent,
@@ -48,10 +52,17 @@ import {
 } from "~/previewMiniPlayerStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { useDeviceState } from "~/state/device";
+import { previewEnvironment } from "~/state/preview";
+import { useEnvironmentScope } from "~/state/session";
+import { useAtomCommand } from "~/state/use-atom-command";
+import { readLocalApi } from "~/localApi";
+
+import { agentControlledBrowserCloseConfirmation } from "../ChatView.logic";
 
 import { DeviceStreamView } from "../device/DeviceStreamView";
 import type { DeviceScreenSize } from "@t3tools/client-runtime/device/stream";
 import type { PreviewStreamViewport } from "@t3tools/client-runtime/preview/server-browser-stream";
+import { closePreviewSession } from "./closePreviewSession";
 import { previewBridge } from "./previewBridge";
 import {
   clampPreviewMiniPlayerPosition,
@@ -127,7 +138,12 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
     snapshot ?? { threadId: threadRef.threadId, tabId },
     threadRef.environmentId,
   );
-  const runtimeTabId = previewRuntimeTabId(threadRef, previewState.serverEpoch, tabId, previewState.sessions[tabId]?.managed);
+  const runtimeTabId = previewRuntimeTabId(
+    threadRef,
+    previewState.serverEpoch,
+    tabId,
+    previewState.sessions[tabId]?.managed,
+  );
   const recordingTabIds = useActiveBrowserRecordingTabIds();
   const recording =
     recordingTabIds.has(runtimeTabId) ||
@@ -154,6 +170,26 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
   const openInPanel = () => {
     usePreviewMiniPlayerStore.getState().close(threadRef);
     useRightPanelStore.getState().openBrowser(threadRef, tabId);
+  };
+
+  const canOperatePreview = useEnvironmentScope(threadRef.environmentId, AuthPreviewOperateScope);
+  const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
+  // The X ends the tab, as the panel's tab X does; hiding the float is what "Open in right panel" is for.
+  const closeTab = () => {
+    const surface = { id: `browser:${tabId}`, kind: "preview", resourceId: tabId } as const;
+    const finish = () => {
+      usePreviewMiniPlayerStore.getState().close(threadRef);
+      useRightPanelStore.getState().closeSurface(threadRef, surface.id);
+      if (canOperatePreview) void closePreviewSession({ closePreview, snapshot, tabId, threadRef });
+    };
+    const message = agentControlledBrowserCloseConfirmation([surface], previewState.desktopByTabId);
+    if (!message) return finish();
+    void readLocalApi()
+      ?.dialogs.confirm(message, { variant: "destructive" })
+      .then(
+        (confirmed) => confirmed && finish(),
+        () => undefined,
+      );
   };
 
   const toggleNativePictureInPicture = async () => {
@@ -192,6 +228,8 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
       label="Floating browser preview"
       recording={recording}
       onOpenInPanel={openInPanel}
+      onClose={closeTab}
+      closeLabel="Close browser tab"
       pillActions={
         canPopOut ? (
           <Tooltip>
@@ -337,6 +375,8 @@ function MiniPlayerShell({
   sourceSize,
   label,
   onOpenInPanel,
+  onClose,
+  closeLabel = "Close floating preview",
   pillActions,
   recording = false,
   cornerRadius = frameCornerRadius,
@@ -347,6 +387,9 @@ function MiniPlayerShell({
   readonly sourceSize: PreviewMiniPlayerSize;
   readonly label: string;
   readonly onOpenInPanel: () => void;
+  /** Replaces hiding the float, for a source whose X should end it. */
+  readonly onClose?: () => void;
+  readonly closeLabel?: string;
   readonly pillActions?: ReactNode;
   readonly recording?: boolean;
   /** The clip radius for a given frame; the pill stays inside the curve. */
@@ -400,9 +443,7 @@ function MiniPlayerShell({
   // Inside a wide curve the default 8px inset would land on the clipped-away corner.
   const pillInset = Math.max(8, Math.round(radius * 0.55));
 
-  const close = () => {
-    usePreviewMiniPlayerStore.getState().close(threadRef);
-  };
+  const close = onClose ?? (() => usePreviewMiniPlayerStore.getState().close(threadRef));
 
   const beginGesture = (
     event: ReactPointerEvent<HTMLElement>,
@@ -542,7 +583,7 @@ function MiniPlayerShell({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label="Close floating preview"
+                      aria-label={closeLabel}
                       onPointerDown={(event) => event.stopPropagation()}
                       onClick={close}
                     />
@@ -550,7 +591,7 @@ function MiniPlayerShell({
                 >
                   <XIcon />
                 </TooltipTrigger>
-                <TooltipPopup side="top">Close floating preview</TooltipPopup>
+                <TooltipPopup side="top">{closeLabel}</TooltipPopup>
               </Tooltip>
             </div>
           </div>

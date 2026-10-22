@@ -750,7 +750,11 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
           yield* closeEngineTab(opener, event.ref.tabId);
           return;
         }
-        const session = yield* publishSession(opener.threadId, opener.agentSessionId, undefined, { binding: opener.binding, ref: opener.ref, engineTabId: event.ref.tabId });
+        const session = yield* publishSession(opener.threadId, opener.agentSessionId, undefined, {
+          binding: opener.binding,
+          ref: opener.ref,
+          engineTabId: event.ref.tabId,
+        });
         const tab: ManagedTab = {
           threadId: opener.threadId,
           tabId: session.tabId,
@@ -878,12 +882,22 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
     const fenceOf = (tab: ManagedTab) =>
       supervisor.state(tab.ref).pipe(Effect.mapError(toOperationError));
 
-    type CallOptions = { readonly outOfBand?: boolean; readonly humanOpenPrincipal?: ManagedBrowserPrincipal };
+    type CallOptions = {
+      readonly outOfBand?: boolean;
+      readonly humanOpenPrincipal?: ManagedBrowserPrincipal;
+    };
 
     /** A page-wide command (no snapshot-ref target) the engine refused because the page has a newer document. */
-    const isStalePageCommand = (command: Record<string, unknown>, error: ServerBrowserPage.ServerBrowserOperationError) =>
+    const isStalePageCommand = (
+      command: Record<string, unknown>,
+      error: ServerBrowserPage.ServerBrowserOperationError,
+    ) =>
       command.kind === "execute" &&
-      !(typeof command.operation === "object" && command.operation !== null && "target" in command.operation) &&
+      !(
+        typeof command.operation === "object" &&
+        command.operation !== null &&
+        "target" in command.operation
+      ) &&
       error.tag === "PreviewAutomationInvalidSelectorError" &&
       (error.detail as { staleRef?: boolean } | undefined)?.staleRef === true;
 
@@ -903,12 +917,20 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
         Effect.catchIf(
           (error) => isStalePageCommand(command, error),
           () =>
-            callOnce<EngineTabResult>(tab, request, { kind: "attach", tabId: tab.engineTabId }).pipe(
+            callOnce<EngineTabResult>(tab, request, {
+              kind: "attach",
+              tabId: tab.engineTabId,
+            }).pipe(
               Effect.andThen((current) => {
                 tab.documentId = current.value.documentId;
                 if (current.value.url !== undefined)
                   tab.url = current.value.url === "about:blank" ? null : current.value.url;
-                return callOnce<A>(tab, request, { ...command, documentId: tab.documentId }, callOptions);
+                return callOnce<A>(
+                  tab,
+                  request,
+                  { ...command, documentId: tab.documentId },
+                  callOptions,
+                );
               }),
             ),
         ),
@@ -926,7 +948,7 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
           .execute(
             state.phase === "agent"
               ? agentPrincipal(tab.agentSessionId)
-              : callOptions?.humanOpenPrincipal ?? agentPrincipal(tab.agentSessionId),
+              : (callOptions?.humanOpenPrincipal ?? agentPrincipal(tab.agentSessionId)),
             tab.ref,
             state.fence,
             { ...command, caller: callerContext(tab, request) },
@@ -1418,20 +1440,29 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
       threadId: string,
       agentSessionId: string,
       url: string | undefined,
-      identity: { binding: PreviewAutomationBrowserBinding; ref: ManagedBrowserRef; engineTabId?: string },
+      identity: {
+        binding: PreviewAutomationBrowserBinding;
+        ref: ManagedBrowserRef;
+        engineTabId?: string;
+      },
+      reveal = false,
     ): Effect.Effect<PreviewSessionSnapshot, ServerBrowserPage.ServerBrowserOperationError> =>
       manager
         .open({
           threadId: threadId as never,
           ...(options.desktop?.available || url === undefined ? {} : { url }),
           managed: (tabId) => ({
-            ...identity.binding, incarnation: identity.ref.incarnation,
+            ...identity.binding,
+            incarnation: identity.ref.incarnation,
             engineTabId: ManagedBrowserTabId.make(identity.engineTabId ?? tabId),
-            hostThreadId: threadId, hostTabId: tabId, shared: false, remote: false,
+            hostThreadId: threadId,
+            hostTabId: tabId,
+            shared: false,
+            remote: false,
             ...(options.desktop?.available ? { native: true } : {}),
           }),
           runtime: "server",
-          reveal: false,
+          reveal,
           automationOwner: agentSessionId,
           beforePublish: (snapshot) => {
             reserved.add(tabKey(threadId, snapshot.tabId));
@@ -1806,7 +1837,14 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
           );
         const recovered: ManagedTab[] = [];
         for (const record of durable) {
-          const session = yield* publishSession(request.threadId, agentSessionId, undefined, { binding, ref, engineTabId: record.engineTabId });
+          // A person's restored tab stays in their thread's panel, where they can see and close it.
+          const session = yield* publishSession(
+            request.threadId,
+            agentSessionId,
+            undefined,
+            { binding, ref, engineTabId: record.engineTabId },
+            agentSessionId.startsWith(HUMAN_SESSION_PREFIX),
+          );
           const opener =
             record.openerEngineTabId === null
               ? undefined
@@ -1968,7 +2006,11 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
             "tabLimit",
           );
         }
-        const session = yield* publishSession(request.threadId, agentSessionId, undefined, { binding, ref, engineTabId });
+        const session = yield* publishSession(request.threadId, agentSessionId, undefined, {
+          binding,
+          ref,
+          engineTabId,
+        });
         const tab: ManagedTab = {
           threadId: request.threadId,
           tabId: session.tabId,
@@ -2010,7 +2052,11 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
         return tab;
       });
 
-    const openSession = (request: PreviewAutomationRequest, input: PreviewAutomationOpenInput, humanPrincipal?: ManagedBrowserPrincipal) =>
+    const openSession = (
+      request: PreviewAutomationRequest,
+      input: PreviewAutomationOpenInput,
+      humanPrincipal?: ManagedBrowserPrincipal,
+    ) =>
       Effect.gen(function* () {
         const reuse = input.reuseExistingTab ?? true;
         const joining = input.joinTab;
@@ -2207,7 +2253,10 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
 
         // The session is published for viewers, but its tab is registered first so the ordinary
         // browser, which mirrors every server session, finds it already claimed.
-        const session = yield* publishSession(request.threadId, agentSessionId, url, { binding, ref });
+        const session = yield* publishSession(request.threadId, agentSessionId, url, {
+          binding,
+          ref,
+        });
         const tab: ManagedTab = {
           threadId: request.threadId,
           tabId: session.tabId,
@@ -2238,11 +2287,16 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
         // Recorded before the browser opens it: a tab the record does not know would be orphaned by a
         // restart, while a record of a tab that never opened is simply dropped at the next attach.
         yield* persist(tab).pipe(Effect.tapError(() => abandon));
-        const opened = yield* call<EngineTabResult>(tab, request, {
-          kind: "open",
-          tabId: tab.engineTabId,
-          url: url ?? "about:blank",
-        }, humanPrincipal === undefined ? undefined : { humanOpenPrincipal: humanPrincipal }).pipe(Effect.tapError(() => abandon));
+        const opened = yield* call<EngineTabResult>(
+          tab,
+          request,
+          {
+            kind: "open",
+            tabId: tab.engineTabId,
+            url: url ?? "about:blank",
+          },
+          humanPrincipal === undefined ? undefined : { humanOpenPrincipal: humanPrincipal },
+        ).pipe(Effect.tapError(() => abandon));
         tab.documentId = opened.value.documentId;
         tab.url = url ?? null;
         tab.title = opened.value.title ?? "";
@@ -2375,12 +2429,22 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
         const input = request.input;
         if (request.operation === "open") {
           const open = input as PreviewAutomationOpenInput;
-          if (humanOpen !== undefined && (
-            request.agentSessionId !== `${HUMAN_SESSION_PREFIX}${humanOpen.sessionId}` ||
-            request.callerEnvironmentId !== ownerEnvironmentId ||
-            open.reuseExistingTab !== false || open.joinTab !== undefined
-          )) return yield* failOperation("PreviewAutomationControlInterruptedError", "Authenticated human opening requires a fresh local tab.");
-          return yield* openSession(request, open, humanOpen === undefined ? undefined : nativeControlPrincipal(humanOpen.sessionId));
+          if (
+            humanOpen !== undefined &&
+            (request.agentSessionId !== `${HUMAN_SESSION_PREFIX}${humanOpen.sessionId}` ||
+              request.callerEnvironmentId !== ownerEnvironmentId ||
+              open.reuseExistingTab !== false ||
+              open.joinTab !== undefined)
+          )
+            return yield* failOperation(
+              "PreviewAutomationControlInterruptedError",
+              "Authenticated human opening requires a fresh local tab.",
+            );
+          return yield* openSession(
+            request,
+            open,
+            humanOpen === undefined ? undefined : nativeControlPrincipal(humanOpen.sessionId),
+          );
         }
         if (request.operation === "sharedTabs") return yield* sharedTabs(request);
         const tab = yield* requireTab(request);
