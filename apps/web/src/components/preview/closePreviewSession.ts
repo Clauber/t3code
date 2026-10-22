@@ -1,9 +1,10 @@
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import type {
-  EnvironmentId,
-  PreviewCloseInput,
-  PreviewSessionSnapshot,
-  ScopedThreadRef,
+import {
+  type EnvironmentId,
+  type PreviewCloseInput,
+  type PreviewSessionSnapshot,
+  type ScopedThreadRef,
+  ThreadId,
 } from "@t3tools/contracts";
 
 import { useClosedViewStore } from "~/closedViewStore";
@@ -34,6 +35,15 @@ export async function closePreviewSession<E>(
   if (result._tag === "Failure") {
     cancelPreviewSessionClose(input.threadRef, input.snapshot, input.tabId);
   } else if (input.snapshot) {
+    // A tab in another environment's browser is held there under its own session; end that too, or
+    // the page outlives its chat tab and keeps counting toward the owner's tab limit.
+    const managed = input.snapshot.managed;
+    if (managed?.remote === true) {
+      void input.closePreview({
+        environmentId: managed.ownerEnvironmentId,
+        input: { threadId: ThreadId.make(managed.hostThreadId), tabId: managed.hostTabId },
+      });
+    }
     useClosedViewStore.getState().remember({
       kind: "browser",
       threadRef: input.threadRef,

@@ -94,4 +94,39 @@ describe("closePreviewSession", () => {
     expect(readThreadPreviewState(threadRef).snapshot).toEqual(snapshot);
     expect(readThreadPreviewState(threadRef).sessions).toEqual({ [snapshot.tabId]: snapshot });
   });
+
+  it("also closes the owner's session of a tab in another environment's browser", async () => {
+    const managedSnapshot = {
+      ...snapshot,
+      managed: {
+        ownerEnvironmentId: "mac",
+        instanceId: "instance-default",
+        profileId: "default",
+        engineTabId: "engine-1",
+        incarnation: "incarnation-1",
+        hostThreadId: "managed-browser:local:thread-1",
+        hostTabId: "host-tab-1",
+        shared: true,
+        native: true,
+        remote: true,
+      },
+    } as PreviewSessionSnapshot;
+    applyPreviewServerSnapshot(threadRef, managedSnapshot);
+    const closePreview = vi.fn(async (_input: unknown) => AsyncResult.success(undefined));
+
+    await closePreviewSession({
+      closePreview,
+      snapshot: managedSnapshot,
+      tabId: snapshot.tabId,
+      threadRef,
+    });
+
+    expect(closePreview.mock.calls.map(([call]) => call)).toEqual([
+      { environmentId: "local", input: { threadId: "thread-1", tabId: "tab-1" } },
+      {
+        environmentId: "mac",
+        input: { threadId: "managed-browser:local:thread-1", tabId: "host-tab-1" },
+      },
+    ]);
+  });
 });
