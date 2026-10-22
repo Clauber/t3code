@@ -1,0 +1,196 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StealthBrowserReleaseManifest",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "name",
+    "version",
+    "sourceCommit",
+    "os",
+    "arch",
+    "engineProtocolVersion",
+    "supportedAdapterRange",
+    "nodeVersion",
+    "patchrightVersion",
+    "stateSchemaVersion",
+    "entrypoint",
+    "browserPrerequisites",
+    "archiveFileName",
+    "archiveSha256",
+    "archiveSize",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Version of the manifest schema itself (e.g. 1.0.0)"
+    },
+    "name": {
+      "type": "string",
+      "const": "stealth-browser"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?$"
+    },
+    "sourceCommit": {
+      "type": "string",
+      "description": "Git commit hash of the source code packaged"
+    },
+    "os": {
+      "type": "string",
+      "enum": ["linux", "darwin", "win32"]
+    },
+    "arch": {
+      "type": "string",
+      "enum": ["x64", "arm64"]
+    },
+    "minLibcVersion": {
+      "type": "string",
+      "description": "Minimum glibc or libc version required on Linux (e.g. 2.31)"
+    },
+    "minOsVersion": {
+      "type": "string",
+      "description": "Minimum OS release or kernel version if applicable"
+    },
+    "engineProtocolVersion": {
+      "type": "string",
+      "enum": ["standalone", "1.0.0"]
+    },
+    "supportedAdapterRange": {
+      "type": "string",
+      "description": "Semver range of compatible host/T3 adapters"
+    },
+    "nodeVersion": {
+      "type": "string",
+      "const": "24.16.0"
+    },
+    "patchrightVersion": {
+      "type": "string",
+      "description": "Exact pinned patchright package version"
+    },
+    "stateSchemaVersion": {
+      "type": "string",
+      "description": "State schema compatibility version"
+    },
+    "entrypoint": {
+      "type": "string",
+      "description": "Relative path to entrypoint script within extracted release (e.g. dist/server.js)"
+    },
+    "entrypoints": {
+      "type": "object",
+      "required": [
+        "standalone",
+        "managed"
+      ],
+      "properties": {
+        "standalone": {
+          "const": "dist/server.js"
+        },
+        "managed": {
+          "const": "dist/managed/main.js"
+        }
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "browserPrerequisites": {
+      "type": "object",
+      "required": ["browser"],
+      "properties": {
+        "browser": {
+          "type": "string",
+          "enum": ["chrome", "chromium"]
+        },
+        "alternatives": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "requiredVersionRange": {
+          "type": "string"
+        }
+      }
+    },
+    "archiveFileName": {
+      "type": "string"
+    },
+    "archiveSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "archiveSize": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "protocolAssets": {
+      "type": "object",
+      "required": [
+        "schemaDir",
+        "fixturesDir",
+        "typesFile"
+      ],
+      "properties": {
+        "schemaDir": {
+          "const": "protocol/schemas"
+        },
+        "fixturesDir": {
+          "const": "protocol/fixtures"
+        },
+        "typesFile": {
+          "const": "protocol/protocol.d.ts"
+        }
+      },
+      "additionalProperties": false
+    },
+    "signatures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["keyId", "algorithm", "signature"],
+        "properties": {
+          "keyId": { "type": "string" },
+          "algorithm": { "type": "string", "enum": ["ed25519"] },
+          "signature": { "type": "string" }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        { "properties": { "os": { "const": "linux" }, "arch": { "const": "x64" } }, "required": ["minLibcVersion"], "not": { "required": ["minOsVersion"] } },
+        { "properties": { "os": { "const": "darwin" }, "arch": { "const": "arm64" }, "minOsVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$" } }, "required": ["minOsVersion"], "not": { "required": ["minLibcVersion"] } }
+      ]
+    },
+    {
+      "if": {
+        "properties": {
+          "engineProtocolVersion": {
+            "const": "1.0.0"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "entrypoints",
+          "capabilities",
+          "protocolAssets"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": false
+}
