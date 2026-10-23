@@ -1604,15 +1604,23 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
         }),
       );
 
-    /** The browser has no such tab (any more): a close has nothing left to do. */
-    const alreadyGone = (error: unknown) => {
+    /** The engine's own typed answer behind a channel error, when that is what failed. */
+    const engineAnswer = (error: unknown) => {
       const inner = (error as { cause?: unknown })?.cause;
-      return (
-        tagOf(error) === "ManagedBrowserChildChannelError" &&
-        tagOf(inner) === "ManagedBrowserEngineError" &&
-        (inner as ManagedBrowserIpc.ManagedBrowserEngineError).code === "not_found"
-      );
+      return tagOf(error) === "ManagedBrowserChildChannelError" &&
+        tagOf(inner) === "ManagedBrowserEngineError"
+        ? (inner as ManagedBrowserIpc.ManagedBrowserEngineError)
+        : undefined;
     };
+
+    /** The browser has no such tab (any more): a close has nothing left to do. */
+    const alreadyGone = (error: unknown) => engineAnswer(error)?.code === "not_found";
+
+    /**
+     * The engine answered that this close can never succeed. Keeping the record would retry it on
+     * every overview, each attempt paying two state deadlines, and that cost was the whole effect.
+     */
+    const closeRefused = (error: unknown) => engineAnswer(error)?.retryable === false;
 
     /** A refusal that will pass: someone holds the lease, it is changing hands, or maintenance is under way. */
     const closeDeferrable = (error: unknown) =>
@@ -1769,6 +1777,11 @@ export const make = (options: ManagedBrowserPreviewAdapterOptions) =>
               )
           ).pipe(
             Effect.catchIf(alreadyGone, () => Effect.void),
+            Effect.catchIf(closeRefused, (error) =>
+              Effect.logWarning("the managed browser refused to close a tab; it is given up", {
+                detail: engineAnswer(error)?.code ?? "unknown",
+              }),
+            ),
             Effect.andThen(
               Effect.try({
                 try: () =>
